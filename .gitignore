@@ -1,0 +1,17 @@
+build/
+out/
+*.bmp
+*.png
+# Never commit original game data
+*.shp
+*.tarc
+*.game
+*.COL
+*.col
+*.gif
+*.GIF
+*.wav
+*.WAV
+*.smk
+d/
+Netstorm/

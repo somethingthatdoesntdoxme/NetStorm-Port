@@ -129,12 +129,63 @@ by edge tiles) is recoloured to the player's colour. There is no separate
 outline. Grass sets: wind = brown, rain = snow/ice, thunder = grey, the green
 set is the common default.
 
-## `.fort` missions — in progress
+## `.fort` missions
 
-Binary, written by the generic world serializer (`template.cpp`,
-`DataManager.cpp`, memstreams). Starts with a byte `'F'` (70) version and a
-flag byte (254 = extended). Type ids are stored as single bytes
-(`numTypes < 256`). Loader entry: `sub_473580` -> `sub_4f3160` / `sub_4f0500`.
+Written by the engine's generic serializer (`template.cpp`, `DataManager.cpp`).
+All 32 shipped missions decode completely (`nstool <dir> forts`).
+
+```
+u8   'F' (version 70)
+u8   flags (254 = extended)
+then sections, each:  u16 length (including the 2 length bytes), payload
+```
+
+| # | Section | Contents |
+|---|---------|----------|
+| 0 | name | 4 bytes, u16 length, name ("Player" / "Unnamed") |
+| 1 | State | 28 bytes |
+| 4 | Chaff | the neutral world: 256 chunks = 16x16 chunks of 16x16 cells |
+| 6 | Territory | 20 x 6-byte records: u8 ?, u8 flags (9 = used, 3 = empty), u8 u8 (seed?), u16 0 |
+| 7 | TypeNames | u8 n, n x u32 name hash (each byte added at shift (i&3)*8) |
+| 9 | Technology | |
+| 10 | Money | f32 |
+| 11 | Deck | |
+| 15–34 | Terr00–Terr19 | each player territory's objects |
+
+Chunk-list sections (Chaff, TerrNN): `u8 version`, then for each chunk in
+raster order a marker byte. `99` ('c') = `u16 count` + objects; anything else
+= empty chunk. Terr sections list only that territory's chunks; the
+chunk-to-world map is built at runtime (the server places forts), so it is not
+in the file.
+
+Object record:
+
+```
+u8  pos      x << 4 | y within the chunk; the object's anchor = bottom-right
+             cell of its footprint
+u8  type     saved type id (index into TypeNames). >= 246: player land marker
+             (player = 255 - type) followed by one value byte. 0: skip 1 byte.
+then, depending on the type's flags (f1 = +0xe8, f2 = +0xec):
+  f1 & 0x20     saveFrame        u8
+  f1 & 0x1000   saveQA           u8
+  f1 & 0x2000   saveQB           u16
+  f2 & 0x4      bridge           u8 piece
+  f2 & 0x4000   factory (v>=2)   u8
+  f2 & 0x5d77cf00 (v>0)          u8 owner
+  f1 & 0x20000  container        u8 n, then n x { u8 type, [QA], [QB], [u8 flags unless bomb] }
+```
+
+Implicit flags (RiftType.cpp `0x4c6347`), from the `group` property and
+others: battery → f2|0x800, archer/cannon → f2|0x8000000, blocker →
+f2|0x4000000; vortex/factory/walker/balloon → container; buried → saveQA.
+Group enum: archer 0, cannon 1, blocker 2, aviary 3, flyer 4, battery 5,
+fence 6, walker 7, balloon 8, misc 9, anti-air 10, none 11.
+
+Land is mostly generated, not stored: objects flagged `createsisland`
+(geysers, archers, cannons, blockers, batteries...) grow their own small
+island; `island` objects are 3x3 pre-drawn islands. Player home islands
+appear to be generated from the territory record (terrain builder, not yet
+ported).
 
 ## Palettes
 

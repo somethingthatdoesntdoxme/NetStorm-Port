@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "core/PngWriter.h"
+#include "data/FortFile.h"
 #include "data/GameData.h"
 
 using namespace ns;
@@ -55,6 +56,34 @@ int main(int argc, char** argv) {
       std::printf("\n");
     }
     return 0;
+  }
+  if (cmd == "forts" || cmd == "fort") {
+    int ok = 0, total = 0;
+    for (auto& [name, bytes] : gd.archive.entries()) {
+      if (name.size() < 5 || name.compare(name.size() - 5, 5, ".fort") != 0) continue;
+      if (cmd == "fort" && (argc < 4 || name.find(argv[3]) == std::string::npos)) continue;
+      ++total;
+      FortFile f;
+      std::string e;
+      bool good = f.parse(bytes, gd.types, &e);
+      ok += good;
+      size_t objs = f.chaff.objects.size(), terrObjs = 0, terrs = 0;
+      for (auto& t : f.territories) {
+        terrObjs += t.objects.size();
+        terrs += !t.objects.empty();
+      }
+      std::printf("%-26s %s  name=%-10s money=%-7g world=%zu objs  territories=%zu (%zu objs)  unknownTypes=%d %s\n",
+                  name.c_str(), good ? "OK " : "BAD", f.name.c_str(), f.money, objs, terrs, terrObjs,
+                  f.unknownTypes, e.c_str());
+      if (cmd == "fort")
+        for (size_t ti = 0; ti < f.territories.size(); ++ti)
+          for (auto& o : f.territories[ti].objects)
+            std::printf("  terr%02zu chunk%d (%2d,%2d) %-18s owner=%d%s\n", ti, o.chunk, o.x, o.y,
+                        o.landMarker ? "<land>" : o.type.c_str(), o.owner,
+                        o.contents.empty() ? "" : " +contents");
+    }
+    std::printf("%d/%d forts decoded\n", ok, total);
+    return ok == total ? 0 : 1;
   }
   if (argc < 4) {
     std::fprintf(stderr, "missing output directory\n");

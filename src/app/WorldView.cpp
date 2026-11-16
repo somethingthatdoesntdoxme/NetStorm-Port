@@ -28,7 +28,57 @@ WorldView::WorldView(Renderer& r, const GameData& gd) : r_(r), gd_(gd), cache_(r
       rimMask_[i] = inEdge[i] > 0 && inFill[i] == 0 && warm;
     }
   }
+  for (auto& [name, bytes] : gd_.archive.entries())
+    if (name.size() > 5 && name.compare(name.size() - 5, 5, ".fort") == 0) missions_.push_back(name);
   buildTestScene(seed_);
+}
+
+void WorldView::frame(float minx, float miny, float maxx, float maxy) {
+  cam_.x = (minx + maxx) / 2;
+  cam_.y = (miny + maxy) / 2;
+  cam_.zoom = std::max(0.25f, std::min(cam_.screenW * 0.92f / std::max(1.0f, maxx - minx),
+                                       cam_.screenH * 0.92f / std::max(1.0f, maxy - miny)));
+}
+
+bool WorldView::loadMissionByName(const std::string& part) {
+  for (size_t i = 0; i < missions_.size(); ++i)
+    if (missions_[i].find(part) != std::string::npos) return loadMission(int(i));
+  return false;
+}
+
+bool WorldView::loadMission(int index) {
+  if (missions_.empty()) return false;
+  index = ((index % int(missions_.size())) + int(missions_.size())) % int(missions_.size());
+  const Bytes* data = gd_.archive.find(missions_[index]);
+  if (!data) return false;
+  FortFile fort;
+  std::string err;
+  if (!fort.parse(*data, gd_.types, &err)) {
+    std::fprintf(stderr, "%s: %s\n", missions_[index].c_str(), err.c_str());
+    return false;
+  }
+  MissionWorld mw;
+  buildMission(gd_, fort, mw, seed_);
+  missionIdx_ = index;
+  sceneName_ = missions_[index];
+  islands_.clear();
+  objects_.clear();
+  islands_.push_back(std::move(mw.land));
+  for (auto& mo : mw.objects) {
+    PlacedObject o;
+    o.type = mo.type;
+    o.island = 0;
+    int fx = std::max(1, int(mo.type->def->num("foot_x", 1)));
+    int fy = std::max(1, int(mo.type->def->num("foot_y", 1)));
+    bool mobile = mo.type->def->hasFlag("walker") || mo.type->name == "priest";
+    o.cellX = mobile ? mo.cellX : mo.cellX - fx + 1;
+    o.cellY = mobile ? mo.cellY : mo.cellY - fy + 1;
+    o.animOffset = float((mo.cellX * 7 + mo.cellY * 13) % 10) * 0.1f;
+    objects_.push_back(o);
+  }
+  frame(float(mw.minX * kCellW), float(mw.minY * kCellH), float((mw.maxX + 1) * kCellW),
+        float((mw.maxY + 1) * kCellH + 40));
+  return true;
 }
 
 void WorldView::buildTestScene(uint32_t seed) {
@@ -98,7 +148,14 @@ void WorldView::handle(const SDL_Event& e) {
       switch (e.key.keysym.sym) {
         case SDLK_ESCAPE: quit_ = true; break;
         case SDLK_g: showGrid_ = !showGrid_; break;
-        case SDLK_n: buildTestScene(++seed_); break;
+        case SDLK_n:
+          sceneName_ = "test layout";
+          missionIdx_ = -1;
+          buildTestScene(++seed_);
+          break;
+        case SDLK_m:
+        case SDLK_RIGHTBRACKET: loadMission(missionIdx_ + 1); break;
+        case SDLK_LEFTBRACKET: loadMission(missionIdx_ - 1); break;
         case SDLK_f: cache_.setSmooth(!cache_.smooth()); break;
         case SDLK_F11: {
           bool fs = SDL_GetWindowFlags(r_.window()) & SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -198,9 +255,15 @@ static SDL_Color playerColour(int owner) {
 void WorldView::drawIsland(const Island& isl) {
   if (!isle_ || isle_->set < 0) return;
   const float ox = float(isl.worldX), oy = float(isl.worldY) + isl.bob;
+  // Only visit cells near the screen (mission worlds are 512x512 cells).
+  float wl, wt, wr, wb;
+  cam_.screenToWorld(0, 0, wl, wt);
+  cam_.screenToWorld(cam_.screenW, cam_.screenH, wr, wb);
+  const int cx0 = std::max(0, int((wl - ox) / kCellW) - 4), cx1 = std::min(isl.width() - 1, int((wr - ox) / kCellW) + 4);
+  const int cy0 = std::max(0, int((wt - oy) / kCellH) - 8), cy1 = std::min(isl.height() - 1, int((wb - oy) / kCellH) + 2);
   // Underside first: stalactites and fringe rock below bottom-facing tiles.
-  for (int y = 0; y < isl.height(); ++y)
-    for (int x = 0; x < isl.width(); ++x) {
+  for (int y = cy0; y <= cy1; ++y)
+    for (int x = cx0; x <= cx1; ++x) {
       if (!isl.filled(x, y)) continue;
       auto tc = isl.tileFor(x, y, seed_);
       if (!tc.fringe) continue;
@@ -215,16 +278,17 @@ void WorldView::drawIsland(const Island& isl) {
       }
     }
   // Surface tiles.
-  for (int y = 0; y < isl.height(); ++y)
-    for (int x = 0; x < isl.width(); ++x) {
+  for (int y = cy0; y <= cy1; ++y)
+    for (int x = cx0; x <= cx1; ++x) {
       if (!isl.filled(x, y)) continue;
       auto tc = isl.tileFor(x, y, seed_);
       int line = isle_->findLine(tc.cluster, tc.variation);
       if (line < 0) line = isle_->findLine(tc.cluster, 1);
       if (line < 0) continue;
       float ax = ox + (x + 1) * kCellW - 1, ay = oy + (y + 1) * kCellH - 1;
-      if (isl.owner > 0 && tc.cluster != "AA")
-        blit(cache_.tinted(isle_->set, isle_->frame(line), playerColour(isl.owner), rimMask_), ax, ay);
+      int own = isl.ownerAt(x, y) ? isl.ownerAt(x, y) : isl.owner;
+      if (own > 0 && tc.cluster != "AA")
+        blit(cache_.tinted(isle_->set, isle_->frame(line), playerColour(own), rimMask_), ax, ay);
       else
         blit(cache_.get(isle_->set, isle_->frame(line)), ax, ay);
       if (showGrid_) {
@@ -274,10 +338,29 @@ void WorldView::drawObjects() {
     const auto& frames = o.type->def->frames;
     // Animate through consecutive frame lines of the first cluster. For types
     // with a "baseframe", these are overlays drawn on top of the base.
-    std::string cl = o.cluster.empty() ? frames.front().cluster : o.cluster;
+    // Default cluster: the line labelled "default", else the first line that
+    // isn't a help/info picture.
+    std::string cl = o.cluster;
+    if (cl.empty()) {
+      for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
+        if (frames[i].label.find("default") != std::string::npos) {
+          cl = frames[i].cluster;
+          break;
+        }
+    }
+    if (cl.empty()) {
+      for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
+        if (frames[i].label.find("help") == std::string::npos && frames[i].label.find("info") == std::string::npos) {
+          cl = frames[i].cluster;
+          break;
+        }
+    }
+    if (cl.empty()) cl = frames.front().cluster;
     std::vector<int> lines;
     for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
-      if (frames[i].cluster == cl) lines.push_back(int(i));
+      if (frames[i].cluster == cl && frames[i].label.find("help") == std::string::npos &&
+          frames[i].label.find("info") == std::string::npos)
+        lines.push_back(int(i));
     if (lines.empty()) return 0;
     double fps = 8.0;
     return lines[size_t((time_ + o.animOffset) * fps) % lines.size()];
@@ -309,11 +392,11 @@ void WorldView::draw() {
   drawSky();
   for (auto& isl : islands_) drawIsland(isl);
   drawObjects();
-  char t[160];
+  char t[256];
   std::snprintf(t, sizeof t,
-                "NetStorm Port - world test  zoom %.2fx  [drag/WASD pan, wheel zoom, N new layout, G grid, F filter, "
-                "Tab sprite viewer]",
-                cam_.zoom);
+                "NetStorm Port - %s  zoom %.2fx  [M/[ ] missions, N test layout, wheel zoom, drag pan, G grid, "
+                "Tab sprites]",
+                sceneName_.c_str(), cam_.zoom);
   SDL_SetWindowTitle(r_.window(), t);
 }
 

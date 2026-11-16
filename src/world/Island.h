@@ -28,7 +28,7 @@ struct TileChoice {
 
 class Island {
  public:
-  Island(int w, int h) : w_(w), h_(h), cells_(size_t(w) * h, Element::None) {}
+  Island(int w, int h) : w_(w), h_(h), cells_(size_t(w) * h, Element::None), owners_(size_t(w) * h, 0) {}
 
   int width() const { return w_; }
   int height() const { return h_; }
@@ -39,6 +39,12 @@ class Island {
     if (x >= 0 && y >= 0 && x < w_ && y < h_) cells_[size_t(y) * w_ + x] = e;
   }
   bool filled(int x, int y) const { return at(x, y) != Element::None; }
+  int ownerAt(int x, int y) const {
+    return (x < 0 || y < 0 || x >= w_ || y >= h_) ? 0 : owners_[size_t(y) * w_ + x];
+  }
+  void setOwner(int x, int y, int o) {
+    if (x >= 0 && y >= 0 && x < w_ && y < h_) owners_[size_t(y) * w_ + x] = uint8_t(o);
+  }
 
   // Picks the tile for a filled cell. `seed` varies the grass texture.
   TileChoice tileFor(int x, int y, uint32_t seed = 0) const;
@@ -55,6 +61,7 @@ class Island {
  private:
   int w_, h_;
   std::vector<Element> cells_;
+  std::vector<uint8_t> owners_;
 };
 
 // Simple generator for test scenes: an organic blob of the given element.

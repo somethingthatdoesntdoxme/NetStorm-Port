@@ -39,6 +39,11 @@ std::string lower(std::string s) {
 }
 }  // namespace
 
+const std::vector<std::string>& engineTypeNames() {
+  static const std::vector<std::string> v(std::begin(kSetTypeNames), std::end(kSetTypeNames));
+  return v;
+}
+
 int TypeInfo::findLine(const std::string& cluster, int variation) const {
   if (!def) return -1;
   for (size_t i = 0; i < def->frames.size(); ++i)

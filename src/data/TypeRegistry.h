@@ -28,6 +28,9 @@ struct TypeInfo {
   int findLine(const std::string& cluster, int variation = 0) const;
 };
 
+// The engine's fixed type-name table (sprite set order).
+const std::vector<std::string>& engineTypeNames();
+
 class TypeRegistry {
  public:
   void build(const GameData& gd);

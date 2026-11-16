@@ -30,12 +30,14 @@ cmake --build build --config Release
 ## Run
 
 ```sh
-./build/netstorm --data "/path/to/Netstorm"            # sprite viewer
+./build/netstorm --data "/path/to/Netstorm"            # world view (Tab: sprite viewer)
+./build/netstorm --data "/path/to/Netstorm" --mission rainvsrain
 ./build/netstorm --data "/path/to/Netstorm" --fullscreen
 ./build/nstool "/path/to/Netstorm" info
 ./build/nstool "/path/to/Netstorm" types               # unit/building stats
 ./build/nstool "/path/to/Netstorm" dump-sprites out/   # all frames as PNG (for upscaling)
 ./build/nstool "/path/to/Netstorm" extract-scripts out/
+./build/nstool "/path/to/Netstorm" forts                 # decode every mission
 ```
 
 Viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,

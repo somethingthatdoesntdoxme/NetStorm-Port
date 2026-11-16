@@ -21,7 +21,9 @@ add_library(nscore STATIC
   src/data/TypeFile.cpp
   src/data/GameData.cpp
   src/data/TypeRegistry.cpp
+  src/data/FortFile.cpp
   src/world/Island.cpp
+  src/world/Mission.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)

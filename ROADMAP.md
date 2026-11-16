@@ -22,7 +22,8 @@ Rough effort, part-time: **4–6 months to a full playable multiplayer game.**
 - [x] Grid + coordinate system (16x11 cells)
 - [x] Island auto-tiling for all 4 elements, undersides, test layouts
 - [x] World view: tiled sky, depth-sorted buildings/units, shadows, zoom/pan
-- [ ] `.fort` parser → load a mission layout and render it
+- [x] `.fort` reader: all 32 missions decode; missions load and render (M / [ ] to cycle)
+- [ ] Port the terrain builder (exact home-island shapes) and the runtime fort placement
 - [ ] Exact fringe rules (lit/unlit pieces), `zorder` classes
 - [ ] Mouse picking and placement footprints (`foot_x/foot_y`, hotfoot ratios)
 

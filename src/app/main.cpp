@@ -18,6 +18,7 @@ int main(int argc, char** argv) {
   std::string shot;
   int startSet = 0;
   bool worldMode = true;
+  std::string mission;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
       worldMode = false;
     } else if (a == "--sprites") worldMode = false;
     else if (a == "--fullscreen") wc.fullscreenDesktop = true;
+    else if (a == "--mission") mission = next();
     else if (a == "--screenshot") shot = next();
     else if (a == "--size") {
       std::string s = next();
@@ -62,6 +64,8 @@ int main(int argc, char** argv) {
   ns::Viewer v(r, gd);
   v.setSet(startSet);
   ns::WorldView world(r, gd);
+  if (!mission.empty() && !world.loadMissionByName(mission))
+    std::fprintf(stderr, "mission '%s' not found\n", mission.c_str());
 
   if (!shot.empty()) {
     if (worldMode) world.draw();

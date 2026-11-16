@@ -6,6 +6,7 @@
 #include "render/Renderer.h"
 #include "render/SpriteCache.h"
 #include "world/Island.h"
+#include "world/Mission.h"
 
 namespace ns {
 
@@ -26,6 +27,10 @@ class WorldView {
   void draw();
   bool wantsQuit() const { return quit_; }
   void buildTestScene(uint32_t seed);
+  // Loads mission `index` from the script archive (sorted list of .fort files).
+  bool loadMission(int index);
+  bool loadMissionByName(const std::string& part);
+  const std::vector<std::string>& missions() const { return missions_; }
 
  private:
   void drawSky();
@@ -47,6 +52,10 @@ class WorldView {
   double time_ = 0;
   bool dragging_ = false, quit_ = false, showGrid_ = false;
   uint32_t seed_ = 1;
+  std::vector<std::string> missions_;
+  int missionIdx_ = -1;
+  std::string sceneName_ = "test layout";
+  void frame(float minx, float miny, float maxx, float maxy);
   std::array<bool, 256> rimMask_{};  // palette indices used only by island rims
 };
 

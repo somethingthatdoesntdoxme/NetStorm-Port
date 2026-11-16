@@ -76,6 +76,11 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     }
     std::string ln = lower(o.type);
     if (ln == "noisland") return;
+    if (ln == "bridge") {
+      int owner = ownerOverride >= 0 ? ownerOverride : std::max(0, o.owner);
+      land.setBridge(ax, ay, owner > 0 ? owner : 9);
+      return;
+    }
     int fx, fy;
     footprint(t, fx, fy);
     int owner = ownerOverride >= 0 ? ownerOverride : std::max(0, o.owner);

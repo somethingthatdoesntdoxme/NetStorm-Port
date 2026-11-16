@@ -7,6 +7,7 @@
 #include "render/SpriteCache.h"
 #include "world/Island.h"
 #include "world/Mission.h"
+#include "game/BridgePieces.h"
 
 namespace ns {
 
@@ -30,12 +31,16 @@ class WorldView {
   // Loads mission `index` from the script archive (sorted list of .fort files).
   bool loadMission(int index);
   bool loadMissionByName(const std::string& part);
+  int autoBuild(int pieces);  // let the bridge AI play `pieces` pieces for the player
   const std::vector<std::string>& missions() const { return missions_; }
 
  private:
   void drawSky();
   void drawIsland(const Island& isl);
   void drawObjects();
+  void drawBridges(const Island& isl, int cx0, int cy0, int cx1, int cy1);
+  void drawBuildUi();
+  void hoverCell(int sx, int sy);
   void anchorOf(const PlacedObject& o, float& wx, float& wy) const;
   void blit(const SpriteTex& st, float wx, float wy);
 
@@ -51,6 +56,13 @@ class WorldView {
   const TypeInfo* cloud_ = nullptr;
   double time_ = 0;
   bool dragging_ = false, quit_ = false, showGrid_ = false;
+  // Bridge building
+  const TypeInfo* bridgeType_ = nullptr;
+  BridgeQueue queue_{1234};
+  int player_ = 1;
+  int hoverX_ = -1, hoverY_ = -1;
+  int pressX_ = 0, pressY_ = 0;
+  bool leftDown_ = false, moved_ = false;
   uint32_t seed_ = 1;
   std::vector<std::string> missions_;
   int missionIdx_ = -1;

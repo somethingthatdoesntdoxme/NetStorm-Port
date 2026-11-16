@@ -40,7 +40,10 @@ cmake --build build --config Release
 ./build/nstool "/path/to/Netstorm" forts                 # decode every mission
 ```
 
-Viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,
+World controls: left click drop bridge piece, right click / R rotate, B let the AI
+place one, drag or WASD pan, wheel zoom, M / [ ] cycle missions, N test layout, G grid.
+
+Sprite viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,
 drag to pan, F sharp/smooth filtering, T cycle team colours, Space animate,
 F11 fullscreen.
 

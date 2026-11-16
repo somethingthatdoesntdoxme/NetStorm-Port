@@ -10,6 +10,7 @@
 // Edge/corner clusters have 2 variants per element. Element order in the
 // file: sun, thunder, wind, rain.
 #include <cstdint>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,8 @@ struct TileChoice {
 
 class Island {
  public:
-  Island(int w, int h) : w_(w), h_(h), cells_(size_t(w) * h, Element::None), owners_(size_t(w) * h, 0) {}
+  Island(int w, int h)
+      : w_(w), h_(h), cells_(size_t(w) * h, Element::None), owners_(size_t(w) * h, 0), bridges_(size_t(w) * h, 0) {}
 
   int width() const { return w_; }
   int height() const { return h_; }
@@ -46,6 +48,19 @@ class Island {
     if (x >= 0 && y >= 0 && x < w_ && y < h_) owners_[size_t(y) * w_ + x] = uint8_t(o);
   }
 
+  // Bridges: 0 = none, otherwise owner (1..8) or 9 = neutral.
+  int bridgeAt(int x, int y) const {
+    return (x < 0 || y < 0 || x >= w_ || y >= h_) ? 0 : bridges_[size_t(y) * w_ + x];
+  }
+  void setBridge(int x, int y, int v) {
+    if (x >= 0 && y >= 0 && x < w_ && y < h_) bridges_[size_t(y) * w_ + x] = uint8_t(v);
+  }
+  // Bridge piece cluster for a bridge cell: railings on every side that
+  // doesn't continue into another bridge cell or land.
+  //   A none  B left  C top  D right  E bottom  F top+left  G top+right
+  //   H bottom+right  I bottom+left  J left+right (vertical)  K top+bottom (horizontal)
+  std::string bridgeCluster(int x, int y) const;
+
   // Picks the tile for a filled cell. `seed` varies the grass texture.
   TileChoice tileFor(int x, int y, uint32_t seed = 0) const;
 
@@ -62,6 +77,7 @@ class Island {
   int w_, h_;
   std::vector<Element> cells_;
   std::vector<uint8_t> owners_;
+  std::vector<uint8_t> bridges_;
 };
 
 // Simple generator for test scenes: an organic blob of the given element.

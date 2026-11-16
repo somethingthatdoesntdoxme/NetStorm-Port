@@ -11,6 +11,7 @@ WorldView::WorldView(Renderer& r, const GameData& gd) : r_(r), gd_(gd), cache_(r
   fringe_ = gd.registry.byName("fringe");
   stalag_ = gd.registry.byName("islandStalag");
   cloud_ = gd.registry.byName("mcloud");
+  bridgeType_ = gd.registry.byName("bridge");
   r_.outputSize(cam_.screenW, cam_.screenH);
   // Rim colours = indices that appear in edge/corner tiles but never in the
   // filled "AA" tiles. Owned islands get these recoloured to the player colour.
@@ -64,6 +65,12 @@ bool WorldView::loadMission(int index) {
   islands_.clear();
   objects_.clear();
   islands_.push_back(std::move(mw.land));
+  player_ = 1;
+  for (auto& mo : mw.objects)
+    if (mo.type->name == "priest" && mo.owner > 0) {
+      player_ = mo.owner;
+      break;
+    }
   for (auto& mo : mw.objects) {
     PlacedObject o;
     o.type = mo.type;
@@ -148,6 +155,8 @@ void WorldView::handle(const SDL_Event& e) {
       switch (e.key.keysym.sym) {
         case SDLK_ESCAPE: quit_ = true; break;
         case SDLK_g: showGrid_ = !showGrid_; break;
+        case SDLK_r: queue_.rotate(); break;
+        case SDLK_b: autoBuild(1); break;  // let the AI place one piece
         case SDLK_n:
           sceneName_ = "test layout";
           missionIdx_ = -1;
@@ -176,13 +185,34 @@ void WorldView::handle(const SDL_Event& e) {
       cam_.y += wy - wy2;
       break;
     }
-    case SDL_MOUSEBUTTONDOWN: dragging_ = true; break;
-    case SDL_MOUSEBUTTONUP: dragging_ = false; break;
+    // Left click drops the current bridge piece (left-drag pans), right
+    // click / R rotates it, middle-drag pans.
+    case SDL_MOUSEBUTTONDOWN:
+      if (e.button.button == SDL_BUTTON_RIGHT) {
+        queue_.rotate();
+      } else {
+        dragging_ = true;
+        leftDown_ = e.button.button == SDL_BUTTON_LEFT;
+        moved_ = false;
+        pressX_ = e.button.x;
+        pressY_ = e.button.y;
+      }
+      break;
+    case SDL_MOUSEBUTTONUP:
+      if (leftDown_ && !moved_ && hoverX_ >= 0 && !islands_.empty() &&
+          canPlaceBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_)) {
+        placeBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_);
+        queue_.next();
+      }
+      dragging_ = leftDown_ = false;
+      break;
     case SDL_MOUSEMOTION:
-      if (dragging_) {
+      if (dragging_ && (std::abs(e.motion.x - pressX_) + std::abs(e.motion.y - pressY_) > 5)) moved_ = true;
+      if (dragging_ && moved_) {
         cam_.x -= e.motion.xrel / cam_.zoom;
         cam_.y -= e.motion.yrel / cam_.zoom;
       }
+      hoverCell(e.motion.x, e.motion.y);
       break;
     case SDL_WINDOWEVENT:
       if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) r_.outputSize(cam_.screenW, cam_.screenH);
@@ -277,6 +307,7 @@ void WorldView::drawIsland(const Island& isl) {
         blit(cache_.get(fringe_->set, f), ax, ay + 40);
       }
     }
+  drawBridges(isl, cx0, cy0, cx1, cy1);
   // Surface tiles.
   for (int y = cy0; y <= cy1; ++y)
     for (int x = cx0; x <= cx1; ++x) {
@@ -312,6 +343,87 @@ void WorldView::anchorOf(const PlacedObject& o, float& wx, float& wy) const {
   } else {
     wx = isl.worldX + float(o.cellX + fx) * kCellW - 1;
     wy = isl.worldY + isl.bob + float(o.cellY + fy) * kCellH - 1;
+  }
+}
+
+int WorldView::autoBuild(int pieces) {
+  if (islands_.empty()) return 0;
+  int placed = 0;
+  for (int i = 0; i < pieces; ++i) {
+    int x, y;
+    if (!bestBridgeMove(islands_[0], queue_, player_, x, y)) {
+      queue_.next();  // can't use this piece: discard it like the original
+      continue;
+    }
+    placeBridge(islands_[0], queue_.current(), x, y, player_);
+    queue_.next();
+    ++placed;
+  }
+  return placed;
+}
+
+void WorldView::hoverCell(int sx, int sy) {
+  if (islands_.empty()) return;
+  const Island& isl = islands_[0];
+  float wx, wy;
+  cam_.screenToWorld(sx, sy, wx, wy);
+  int cx = int(std::floor((wx - isl.worldX) / kCellW)), cy = int(std::floor((wy - isl.worldY - isl.bob) / kCellH));
+  // Centre the piece on the cursor.
+  int mw = 0, mh = 0;
+  for (auto [x, y] : queue_.current().cells) mw = std::max(mw, x), mh = std::max(mh, y);
+  hoverX_ = cx - mw / 2;
+  hoverY_ = cy - mh / 2;
+}
+
+void WorldView::drawBridges(const Island& isl, int cx0, int cy0, int cx1, int cy1) {
+  if (!bridgeType_ || bridgeType_->set < 0) return;
+  const float ox = float(isl.worldX), oy = float(isl.worldY) + isl.bob;
+  for (int y = cy0; y <= cy1; ++y)
+    for (int x = cx0; x <= cx1; ++x) {
+      if (!isl.bridgeAt(x, y)) continue;
+      int line = bridgeType_->findLine(isl.bridgeCluster(x, y), 1);
+      if (line < 0) continue;
+      blit(cache_.get(bridgeType_->set, bridgeType_->frame(line)), ox + (x + 1) * kCellW - 1,
+           oy + (y + 1) * kCellH - 1);
+    }
+}
+
+void WorldView::drawBuildUi() {
+  if (!bridgeType_ || bridgeType_->set < 0 || islands_.empty()) return;
+  SDL_Renderer* ren = r_.sdl();
+  const Island& isl = islands_[0];
+  // Ghost of the current piece under the cursor.
+  if (hoverX_ >= 0) {
+    bool ok = canPlaceBridge(isl, queue_.current(), hoverX_, hoverY_, player_);
+    int line = bridgeType_->findLine("A", 1);
+    const SpriteTex& st = cache_.get(bridgeType_->set, bridgeType_->frame(line));
+    if (st.tex) {
+      SDL_SetTextureAlphaMod(st.tex, 170);
+      SDL_SetTextureColorMod(st.tex, ok ? 150 : 255, ok ? 255 : 90, ok ? 150 : 90);
+      for (auto [dx, dy] : queue_.current().cells)
+        blit(st, float(isl.worldX + (hoverX_ + dx + 1) * kCellW - 1),
+             float(isl.worldY + isl.bob + (hoverY_ + dy + 1) * kCellH - 1));
+      SDL_SetTextureAlphaMod(st.tex, 255);
+      SDL_SetTextureColorMod(st.tex, 255, 255, 255);
+    }
+  }
+  // Piece queue panel (top-left), drawn at a fixed screen scale.
+  const float sc = 3.0f;
+  SDL_FRect panel{12, 12, 130, 360};
+  SDL_SetRenderDrawColor(ren, 20, 20, 30, 190);
+  SDL_RenderFillRectF(ren, &panel);
+  SDL_SetRenderDrawColor(ren, 160, 140, 100, 255);
+  SDL_RenderDrawRectF(ren, &panel);
+  int line = bridgeType_->findLine("A", 1);
+  const SpriteTex& st = cache_.get(bridgeType_->set, bridgeType_->frame(line));
+  for (int i = 0; i < BridgeQueue::kVisible; ++i) {
+    const BridgeShape& s = queue_.upcoming(i);
+    float px = 30, py = 30 + i * 112.0f;
+    float k = i == 0 ? sc : sc * 0.75f;
+    for (auto [dx, dy] : s.cells) {
+      SDL_FRect d{px + dx * 16 * k / 1.6f, py + dy * 11 * k / 1.6f, 16 * k / 1.6f, (st.h) * k / 1.6f};
+      if (st.tex) SDL_RenderCopyF(ren, st.tex, nullptr, &d);
+    }
   }
 }
 
@@ -392,6 +504,7 @@ void WorldView::draw() {
   drawSky();
   for (auto& isl : islands_) drawIsland(isl);
   drawObjects();
+  drawBuildUi();
   char t[256];
   std::snprintf(t, sizeof t,
                 "NetStorm Port - %s  zoom %.2fx  [M/[ ] missions, N test layout, wheel zoom, drag pan, G grid, "

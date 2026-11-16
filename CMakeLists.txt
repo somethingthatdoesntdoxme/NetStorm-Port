@@ -24,6 +24,7 @@ add_library(nscore STATIC
   src/data/FortFile.cpp
   src/world/Island.cpp
   src/world/Mission.cpp
+  src/game/BridgePieces.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)

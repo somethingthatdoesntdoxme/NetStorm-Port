@@ -28,6 +28,8 @@ Rough effort, part-time: **4–6 months to a full playable multiplayer game.**
 - [ ] Mouse picking and placement footprints (`foot_x/foot_y`, hotfoot ratios)
 
 ## M2 — Core simulation (≈6–8 weeks) — the hard bit
+- [x] Bridge pieces: queue, rotate, legal drops, auto-tiled railings, claiming islands
+- [x] Bridge AI v1 (greedy towards nearest unclaimed land)
 Deterministic fixed-tick simulation (needed for lockstep netplay).
 - [ ] Bridges: piece rotation, connection rules, cracking/hard variants
 - [ ] Priest, temples, geysers, storm power economy, collectors (golems)

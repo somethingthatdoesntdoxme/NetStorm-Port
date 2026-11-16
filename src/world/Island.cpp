@@ -39,6 +39,24 @@ TileChoice Island::tileFor(int x, int y, uint32_t seed) const {
   return {"AA", 6 * ei + 1 + int(r % 6), false};
 }
 
+std::string Island::bridgeCluster(int x, int y) const {
+  auto conn = [&](int cx, int cy) { return bridgeAt(cx, cy) != 0 || filled(cx, cy); };
+  bool n = conn(x, y - 1), s = conn(x, y + 1), w = conn(x - 1, y), e = conn(x + 1, y);
+  int open = n + s + w + e;
+  if (open == 4) return "A";
+  if (open == 3) return !w ? "B" : !n ? "C" : !e ? "D" : "E";
+  if (open == 2) {
+    if (n && s) return "J";
+    if (w && e) return "K";
+    if (s && e) return "F";  // railings top + left
+    if (s && w) return "G";
+    if (n && w) return "H";
+    return "I";  // n && e
+  }
+  if (open == 1) return (n || s) ? "J" : "K";  // dead end: straight piece
+  return "A";
+}
+
 void Island::tidy() {
   // A filled cell needs at least one horizontal and one vertical neighbour,
   // otherwise there's no tile for it (1-wide spurs).

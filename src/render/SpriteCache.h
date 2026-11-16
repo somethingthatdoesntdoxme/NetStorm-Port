@@ -24,6 +24,8 @@ class SpriteCache {
   ~SpriteCache() { clear(); }
 
   const SpriteTex& get(int set, int frame, int remap = 0);
+  // Shadow frames are a single palette index; draw them as translucent black.
+  const SpriteTex& shadow(int set, int frame);
   void clear();
   void setSmooth(bool s);  // linear vs nearest filtering when zoomed
   bool smooth() const { return smooth_; }
@@ -32,6 +34,7 @@ class SpriteCache {
   SDL_Renderer* ren_;
   const GameData& gd_;
   bool smooth_ = false;
+  const SpriteTex& build(uint64_t key, int set, int frame, int remap, bool shadow);
   std::unordered_map<uint64_t, SpriteTex> map_;
 };
 

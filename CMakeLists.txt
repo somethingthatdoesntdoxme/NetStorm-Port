@@ -20,6 +20,8 @@ add_library(nscore STATIC
   src/data/PeResources.cpp
   src/data/TypeFile.cpp
   src/data/GameData.cpp
+  src/data/TypeRegistry.cpp
+  src/world/Island.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)
@@ -33,6 +35,7 @@ add_executable(netstorm
   src/render/Renderer.cpp
   src/render/SpriteCache.cpp
   src/app/Viewer.cpp
+  src/app/WorldView.cpp
   src/app/main.cpp
 )
 target_link_libraries(netstorm PRIVATE nscore)

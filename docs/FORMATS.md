@@ -89,12 +89,45 @@ table first (`0x51eb30`); `d/!color.dat` holds 9 such tables.
 
 All 4,124 frames decode cleanly (largest 510 x 511).
 
-### Mapping sets to types — TODO
+### Mapping sets to types
 
-Sets correspond to `.type` definitions (frame count = frame lines, doubled for
-types with the `shadow`/`flyershadow` flag), but the set order isn't
-alphabetical. Next step: recover the registration order from `sub_4c7530`
-(called from the shape loader at `0x4c9b40`).
+The engine has a fixed table of 119 type names (pointer table at
+`0x60dae0`: `dude, sunArcher, sunAviary, ...`). **Sprite set N belongs to
+entry N.** Verified for 115/119 sets by frame count (the other 4 have no
+matching script or have a couple of extra frames).
+
+Within a set, frame k is the image for the k-th frame line of the `.type`
+file. Types flagged `shadow`/`flyershadow` have a second block of the same
+length holding each line's shadow. Shadow frames use only palette index 150
+and are drawn as translucent black.
+
+Lines labelled `baseframe` are the static body of a building; other lines in
+the same type are **overlays** drawn on top of it (factory windows lighting
+up, an archer's crossbow at each of its orientations).
+
+## Islands
+
+Islands sit on a rectangular grid of 16x11-pixel cells. Terrain is
+auto-tiled from type `isle` (set 27) by looking at the 8 neighbours:
+
+| Cluster | Meaning |
+|---------|---------|
+| AA | filled (6 variants per element) |
+| BF / CG / DH / EI | left / top / right / bottom edge |
+| FL / GM / HN / IO | outside corner top-left / top-right / bottom-right / bottom-left |
+| AB / AC / AD / AE | inside corner, missing SW / NW / NE / SE diagonal |
+
+Edge pieces have 2 variants per element; element order in the file is sun,
+thunder, wind, rain. Tiles, buildings and fringe are anchored at the
+bottom-right pixel of their cell/footprint; walkers anchor at their feet.
+`fringe` (set 32) and `islandStalag` (set 25) hang under bottom-facing edges.
+
+## `.fort` missions — in progress
+
+Binary, written by the generic world serializer (`template.cpp`,
+`DataManager.cpp`, memstreams). Starts with a byte `'F'` (70) version and a
+flag byte (254 = extended). Type ids are stored as single bytes
+(`numTypes < 256`). Loader entry: `sub_473580` -> `sub_4f3160` / `sub_4f0500`.
 
 ## Palettes
 

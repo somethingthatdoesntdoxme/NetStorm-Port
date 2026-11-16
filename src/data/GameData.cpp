@@ -45,6 +45,7 @@ bool GameData::load(const std::filesystem::path& installDir, std::string* err) {
     if (name.size() > 5 && name.compare(name.size() - 5, 5, ".type") == 0)
       types.push_back(parseTypeFile(std::string(bytes.begin(), bytes.end()), name));
   }
+  registry.build(*this);
   return true;
 }
 

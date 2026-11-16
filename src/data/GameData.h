@@ -7,6 +7,7 @@
 #include "data/ShapeDb.h"
 #include "data/Taff.h"
 #include "data/TypeFile.h"
+#include "data/TypeRegistry.h"
 
 namespace ns {
 
@@ -17,6 +18,7 @@ struct GameData {
   Palette gamePalette;
   RemapTables remaps;
   std::vector<TypeDef> types;
+  TypeRegistry registry;  // sprite set <-> type mapping
 
   // Loads all of the above. On failure returns false and fills `err`.
   bool load(const std::filesystem::path& installDir, std::string* err);

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app/Viewer.h"
+#include "app/WorldView.h"
 #include "data/GameData.h"
 #include "render/Renderer.h"
 
@@ -16,12 +17,16 @@ int main(int argc, char** argv) {
   std::string dataDir = ".";
   std::string shot;
   int startSet = 0;
+  bool worldMode = true;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
     if (a == "--data") dataDir = next();
-    else if (a == "--set") startSet = std::atoi(next().c_str());
+    else if (a == "--set") {
+      startSet = std::atoi(next().c_str());
+      worldMode = false;
+    } else if (a == "--sprites") worldMode = false;
     else if (a == "--fullscreen") wc.fullscreenDesktop = true;
     else if (a == "--screenshot") shot = next();
     else if (a == "--size") {
@@ -56,23 +61,37 @@ int main(int argc, char** argv) {
   }
   ns::Viewer v(r, gd);
   v.setSet(startSet);
+  ns::WorldView world(r, gd);
 
   if (!shot.empty()) {
-    v.draw();
+    if (worldMode) world.draw();
+    else v.draw();
     bool ok = r.screenshot(shot);
     std::printf("%s %s\n", ok ? "wrote" : "FAILED to write", shot.c_str());
     return ok ? 0 : 1;
   }
 
   Uint64 last = SDL_GetPerformanceCounter();
-  while (!v.wantsQuit()) {
+  while (!v.wantsQuit() && !world.wantsQuit()) {
     SDL_Event e;
-    while (SDL_PollEvent(&e)) v.handle(e);
+    while (SDL_PollEvent(&e)) {
+      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_TAB) {
+        worldMode = !worldMode;
+        continue;
+      }
+      if (worldMode) world.handle(e);
+      else v.handle(e);
+    }
     Uint64 now = SDL_GetPerformanceCounter();
     double dt = double(now - last) / SDL_GetPerformanceFrequency();
     last = now;
-    v.update(dt);
-    v.draw();
+    if (worldMode) {
+      world.update(dt);
+      world.draw();
+    } else {
+      v.update(dt);
+      v.draw();
+    }
     SDL_RenderPresent(r.sdl());
   }
   return 0;

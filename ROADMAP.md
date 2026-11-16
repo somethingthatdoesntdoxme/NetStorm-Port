@@ -13,14 +13,16 @@ Rough effort, part-time: **4–6 months to a full playable multiplayer game.**
 - [x] `.type` parser (stats, flags, animation frames)
 - [x] C++20 / SDL2 engine skeleton, camera with free zoom, texture cache
 - [x] Sprite viewer, `nstool` (info / types / extract-scripts / dump-sprites)
-- [ ] Map sprite sets → types (registration order from `sub_4c7530`)
-- [ ] Confirm the in-game palette; shadow rendering; team remaps
+- [x] Map sprite sets → types
+- [x] Shadow rendering, base frames + overlays
+- [ ] Confirm the in-game palette; team remaps
 
 ## M1 — The world (≈3–4 weeks)
-- [ ] Isometric grid + coordinate system (tiles are 17x12 diamonds)
-- [ ] Island generation / loading (terrain sets, rims, grass, rock, snow)
+- [x] Grid + coordinate system (16x11 cells)
+- [x] Island auto-tiling for all 4 elements, undersides, test layouts
+- [x] World view: tiled sky, depth-sorted buildings/units, shadows, zoom/pan
 - [ ] `.fort` parser → load a mission layout and render it
-- [ ] Clouds/sky background, depth sorting (`zorder` classes)
+- [ ] Exact fringe rules (lit/unlit pieces), `zorder` classes
 - [ ] Mouse picking and placement footprints (`foot_x/foot_y`, hotfoot ratios)
 
 ## M2 — Core simulation (≈6–8 weeks) — the hard bit

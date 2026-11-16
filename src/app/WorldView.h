@@ -47,6 +47,7 @@ class WorldView {
   double time_ = 0;
   bool dragging_ = false, quit_ = false, showGrid_ = false;
   uint32_t seed_ = 1;
+  std::array<bool, 256> rimMask_{};  // palette indices used only by island rims
 };
 
 }  // namespace ns

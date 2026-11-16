@@ -50,6 +50,7 @@ class Island {
   // World position of the cell's anchor (bottom-right pixel of its tile).
   int worldX = 0, worldY = 0;
   float bob = 0;  // vertical float offset (islands drift gently)
+  int owner = 0;  // 0 = nobody, 1..8 = player (edge glow colour)
 
  private:
   int w_, h_;

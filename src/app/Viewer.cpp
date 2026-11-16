@@ -50,8 +50,8 @@ void Viewer::layout() {
 void Viewer::updateTitle() {
   char t[256];
   std::snprintf(t, sizeof t,
-                "NetStorm Port - sprite set %d/%d %s (%d frames)  zoom %.2fx  %s  team %d  [<-/-> set, wheel zoom, "
-                "drag pan, F filter, T team, Space animate]",
+                "NetStorm Port - sprite set %d/%d %s (%d frames)  zoom %.2fx  %s  fx %d  [<-/-> set, wheel zoom, "
+                "drag pan, F filter, T effect table, Space animate]",
                 set_, gd_.shapes.setCount() - 1,
                 gd_.registry.bySet(set_) ? gd_.registry.bySet(set_)->name.c_str() : "?", gd_.shapes.frameCount(set_),
                 cam_.zoom,

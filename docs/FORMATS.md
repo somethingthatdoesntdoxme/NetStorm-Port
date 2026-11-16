@@ -84,8 +84,10 @@ then (y1-y0+1) RLE rows, each a code stream ending in 0:
   odd  2n+1    n literal pixels follow
 ```
 
-Pixels are 8-bit palette indices. Team colours go through a 256-byte remap
-table first (`0x51eb30`); `d/!color.dat` holds 9 such tables.
+Pixels are 8-bit palette indices. The blitter can pass them through a 256-byte
+remap table first (`0x51eb30`). `d/!color.dat` holds 9 such tables, and they
+are **lighting/effect tables, not team colours**: brighten, darken, black
+silhouette, red damage flash, identity (table 4), etc.
 
 All 4,124 frames decode cleanly (largest 510 x 511).
 
@@ -122,6 +124,11 @@ thunder, wind, rain. Tiles, buildings and fringe are anchored at the
 bottom-right pixel of their cell/footprint; walkers anchor at their feet.
 `fringe` (set 32) and `islandStalag` (set 25) hang under bottom-facing edges.
 
+Ownership: an owned island's orange rim highlight (palette indices only used
+by edge tiles) is recoloured to the player's colour. There is no separate
+outline. Grass sets: wind = brown, rain = snow/ice, thunder = grey, the green
+set is the common default.
+
 ## `.fort` missions — in progress
 
 Binary, written by the generic world serializer (`template.cpp`,
@@ -132,7 +139,7 @@ flag byte (254 = extended). Type ids are stored as single bytes
 ## Palettes
 
 - In-game palette: 8-bit bitmap resource `RT_BITMAP #139` in `netstorm.game`
-  (provisional — matches grass/skin tones; verify against a real screenshot).
+  (confirmed against in-game screenshots).
 - `GamePalSpec = "{DataDir}\{local.1}.COL"`, chosen per fort via `fortPal`.
 - `.COL` files: `u32 size (0x308)`, `u32 magic (0xB123)`, 256 x RGB. The ones
   shipped in `d/` belong to the help-screen GIFs and title screens.

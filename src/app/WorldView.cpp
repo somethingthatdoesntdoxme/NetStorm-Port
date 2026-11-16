@@ -12,18 +12,37 @@ WorldView::WorldView(Renderer& r, const GameData& gd) : r_(r), gd_(gd), cache_(r
   stalag_ = gd.registry.byName("islandStalag");
   cloud_ = gd.registry.byName("mcloud");
   r_.outputSize(cam_.screenW, cam_.screenH);
+  // Rim colours = indices that appear in edge/corner tiles but never in the
+  // filled "AA" tiles. Owned islands get these recoloured to the player colour.
+  if (isle_ && isle_->def) {
+    std::array<int, 256> inEdge{}, inFill{};
+    for (size_t i = 0; i < isle_->def->frames.size() && int(i) < isle_->imageFrames; ++i) {
+      auto f = gd_.shapes.decode(isle_->set, int(i));
+      auto& cnt = isle_->def->frames[i].cluster == "AA" ? inFill : inEdge;
+      for (size_t p = 0; p < f.index.size(); ++p)
+        if (f.mask[p]) cnt[f.index[p]]++;
+    }
+    for (int i = 0; i < 256; ++i) {
+      const Rgb& c = gd_.gamePalette.c[i];
+      bool warm = c.r > c.b + 60 && c.r >= c.g;  // the rim highlight is orange
+      rimMask_[i] = inEdge[i] > 0 && inFill[i] == 0 && warm;
+    }
+  }
   buildTestScene(seed_);
 }
 
 void WorldView::buildTestScene(uint32_t seed) {
   islands_.clear();
   objects_.clear();
-  const Element els[4] = {Element::Wind, Element::Sun, Element::Rain, Element::Thunder};
+  // Grass type is per island (the original mixes them freely; player
+  // islands are usually the green set).
+  const Element els[4] = {Element::Sun, Element::Wind, Element::Rain, Element::Thunder};
   const int pos[4][2] = {{0, 0}, {30, -4}, {4, 26}, {34, 24}};
   for (int i = 0; i < 4; ++i) {
     Island isl = makeBlobIsland(22 + int(seed % 3) * 2, 18, els[i], seed * 31 + i * 7);
     isl.worldX = pos[i][0] * kCellW;
     isl.worldY = pos[i][1] * kCellH;
+    isl.owner = i == 0 ? 1 : (i == 3 ? 2 : 0);
     islands_.push_back(std::move(isl));
   }
   // Frame the whole layout.
@@ -50,21 +69,25 @@ void WorldView::buildTestScene(uint32_t seed) {
     o.animOffset = float((cx * 7 + cy * 13) % 10) * 0.1f;
     objects_.push_back(o);
   };
-  // A sample of the game's buildings and units on each island.
-  add("windFactory", 0, 6, 4);
-  add("windArcher", 0, 13, 9);
-  add("windArcher", 0, 4, 11);
-  add("geyser", 0, 9, 11);
-  add("priest", 0, 15, 5);
-  add("sunFactory", 1, 7, 5);
-  add("sunArcher", 1, 13, 10);
-  add("sunCannon", 1, 4, 10);
+  // Island 0: a thunder base like the reference screenshot (red player).
+  add("thunderFactory", 0, 8, 3);
+  add("thunderArcher", 0, 4, 6);
+  add("thunderArcher", 0, 15, 5);
+  add("thunderArcher", 0, 12, 10);
+  add("thunderFence", 0, 4, 11);
+  add("thunderFence", 0, 17, 9);
+  add("priest", 0, 11, 13);
+  // The others: one of each fury (blue player owns island 3).
+  add("windFactory", 1, 6, 4);
+  add("windArcher", 1, 13, 9);
+  add("geyser", 1, 4, 10);
+  add("sunFactory", 1, 13, 2);
   add("rainFactory", 2, 6, 5);
   add("rainBlocker", 2, 13, 10);
   add("rainCannon", 2, 5, 11);
-  add("thunderFactory", 3, 6, 5);
-  add("thunderArcher", 3, 13, 10);
-  add("thunderCannon", 3, 5, 11);
+  add("sunArcher", 3, 13, 10);
+  add("sunCannon", 3, 5, 11);
+  add("windBattery", 3, 9, 6);
   add("altar", 3, 15, 4);
 }
 
@@ -158,10 +181,18 @@ void WorldView::drawSky() {
       const SpriteTex& st = cache_.get(cloud_->set, f);
       if (!st.tex) continue;
       SDL_FRect d{(tx * tile - left) * z, (ty * tile - top) * z, tile * z + 1, tile * z + 1};
-      SDL_SetTextureColorMod(st.tex, 175, 180, 205);  // push the sky back a bit
+      SDL_SetTextureColorMod(st.tex, 112, 104, 128);  // dusky purple-grey, as in the original
       SDL_RenderCopyF(ren, st.tex, nullptr, &d);
       SDL_SetTextureColorMod(st.tex, 255, 255, 255);
     }
+}
+
+// Player colours for owned-island rims.
+static SDL_Color playerColour(int owner) {
+  static const SDL_Color kPlayer[9] = {{0, 0, 0, 0},       {235, 45, 35, 255}, {45, 120, 255, 255},
+                                       {250, 215, 45, 255}, {45, 205, 75, 255}, {205, 65, 225, 255},
+                                       {45, 225, 225, 255}, {250, 145, 35, 255}, {240, 240, 240, 255}};
+  return kPlayer[(owner >= 0 && owner <= 8) ? owner : 0];
 }
 
 void WorldView::drawIsland(const Island& isl) {
@@ -192,7 +223,10 @@ void WorldView::drawIsland(const Island& isl) {
       if (line < 0) line = isle_->findLine(tc.cluster, 1);
       if (line < 0) continue;
       float ax = ox + (x + 1) * kCellW - 1, ay = oy + (y + 1) * kCellH - 1;
-      blit(cache_.get(isle_->set, isle_->frame(line)), ax, ay);
+      if (isl.owner > 0 && tc.cluster != "AA")
+        blit(cache_.tinted(isle_->set, isle_->frame(line), playerColour(isl.owner), rimMask_), ax, ay);
+      else
+        blit(cache_.get(isle_->set, isle_->frame(line)), ax, ay);
       if (showGrid_) {
         SDL_FRect d = cam_.toScreen(ax - kCellW + 1, ay - kCellH + 1, kCellW, kCellH);
         SDL_SetRenderDrawColor(r_.sdl(), 255, 255, 255, 40);

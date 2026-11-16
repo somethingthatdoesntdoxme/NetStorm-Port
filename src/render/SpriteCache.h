@@ -26,6 +26,9 @@ class SpriteCache {
   const SpriteTex& get(int set, int frame, int remap = 0);
   // Shadow frames are a single palette index; draw them as translucent black.
   const SpriteTex& shadow(int set, int frame);
+  // Recolours the palette indices flagged in `tintMask` towards `rgb`, keeping
+  // their brightness (used for player-owned island rims).
+  const SpriteTex& tinted(int set, int frame, SDL_Color rgb, const std::array<bool, 256>& tintMask);
   void clear();
   void setSmooth(bool s);  // linear vs nearest filtering when zoomed
   bool smooth() const { return smooth_; }
@@ -34,7 +37,9 @@ class SpriteCache {
   SDL_Renderer* ren_;
   const GameData& gd_;
   bool smooth_ = false;
-  const SpriteTex& build(uint64_t key, int set, int frame, int remap, bool shadow);
+  const SpriteTex& build(uint64_t key, int set, int frame, int remap, bool shadow,
+                         const SDL_Color* tint = nullptr, const std::array<bool, 256>* tintMask = nullptr);
+  std::unordered_map<uint64_t, SpriteTex> tintMap_;
   std::unordered_map<uint64_t, SpriteTex> map_;
 };
 

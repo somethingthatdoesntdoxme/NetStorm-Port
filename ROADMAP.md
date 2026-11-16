@@ -15,7 +15,8 @@ Rough effort, part-time: **4–6 months to a full playable multiplayer game.**
 - [x] Sprite viewer, `nstool` (info / types / extract-scripts / dump-sprites)
 - [x] Map sprite sets → types
 - [x] Shadow rendering, base frames + overlays
-- [ ] Confirm the in-game palette; team remaps
+- [x] Palette confirmed against in-game screenshots
+- [x] Player ownership: island rims recoloured to the player colour
 
 ## M1 — The world (≈3–4 weeks)
 - [x] Grid + coordinate system (16x11 cells)

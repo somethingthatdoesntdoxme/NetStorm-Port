@@ -32,8 +32,10 @@ Rough effort, part-time: **4–6 months to a full playable multiplayer game.**
 - [x] Bridge AI v1 (greedy towards nearest unclaimed land)
 Deterministic fixed-tick simulation (needed for lockstep netplay).
 - [ ] Bridges: piece rotation, connection rules, cracking/hard variants
-- [ ] Priest, temples, geysers, storm power economy, collectors (golems)
-- [ ] Workshops, unit production queue, tech levels / sacrifices / altar
+- [x] Storm Power economy: golems mine geysers on your land and deliver to the temple (pathing over land + bridges)
+- [x] Workshops build units for Storm Power, energy check by fury, drop finished units into open sky
+- [ ] Exact build times, energy radius/falloff, golem/priest construction (temples, workshops, altars)
+- [ ] Production slots per workshop level, tech levels / sacrifices / altar
 - [ ] Shooters, barricades, missiles and arcs, damage, hp, destruction, falling islands
 - [ ] Flyers, balloons, walkers, vortices, spells (bombs: twister, meteor, graviton...)
 - [ ] Wind/rain/thunder/sun element rules

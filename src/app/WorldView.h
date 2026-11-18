@@ -8,6 +8,9 @@
 #include "world/Island.h"
 #include "world/Mission.h"
 #include "game/BridgePieces.h"
+#include "game/Sim.h"
+
+#include <memory>
 
 namespace ns {
 
@@ -31,7 +34,11 @@ class WorldView {
   // Loads mission `index` from the script archive (sorted list of .fort files).
   bool loadMission(int index);
   bool loadMissionByName(const std::string& part);
-  int autoBuild(int pieces);  // let the bridge AI play `pieces` pieces for the player
+  int autoBuild(int pieces);
+  // Test hook: open the first own workshop and start building its first affordable unit.
+  std::string demoProduction();
+  Sim* sim() { return sim_.get(); }
+  int player() const { return player_; }  // let the bridge AI play `pieces` pieces for the player
   const std::vector<std::string>& missions() const { return missions_; }
 
  private:
@@ -41,7 +48,11 @@ class WorldView {
   void drawBridges(const Island& isl, int cx0, int cy0, int cx1, int cy1);
   void drawBuildUi();
   void hoverCell(int sx, int sy);
-  void anchorOf(const PlacedObject& o, float& wx, float& wy) const;
+  void anchorOf(const Entity& e, float& wx, float& wy) const;
+  void startSim(float startPower);
+  void drawHud();
+  bool handleUiClick(int sx, int sy);
+  const Entity* entityAtScreen(int sx, int sy) const;
   void blit(const SpriteTex& st, float wx, float wy);
 
   Renderer& r_;
@@ -49,7 +60,17 @@ class WorldView {
   SpriteCache cache_;
   Camera cam_;
   std::vector<Island> islands_;
-  std::vector<PlacedObject> objects_;
+  std::unique_ptr<Sim> sim_;
+  double simAcc_ = 0;
+  int selectedWorkshop_ = -1;  // production menu open for this workshop
+  int dropIndex_ = -1;         // placing this ready unit
+  std::string message_;
+  double messageTime_ = 0;
+  struct Button {
+    SDL_FRect r;
+    std::string action;
+  };
+  std::vector<Button> buttons_;
   const TypeInfo* isle_ = nullptr;
   const TypeInfo* fringe_ = nullptr;
   const TypeInfo* stalag_ = nullptr;

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include "render/TinyFont.h"
+
 namespace ns {
 
 WorldView::WorldView(Renderer& r, const GameData& gd) : r_(r), gd_(gd), cache_(r.sdl(), gd) {
@@ -63,7 +65,6 @@ bool WorldView::loadMission(int index) {
   missionIdx_ = index;
   sceneName_ = missions_[index];
   islands_.clear();
-  objects_.clear();
   islands_.push_back(std::move(mw.land));
   player_ = 1;
   for (auto& mo : mw.objects)
@@ -71,89 +72,91 @@ bool WorldView::loadMission(int index) {
       player_ = mo.owner;
       break;
     }
+  sim_ = std::make_unique<Sim>(gd_, islands_[0]);
   for (auto& mo : mw.objects) {
-    PlacedObject o;
-    o.type = mo.type;
-    o.island = 0;
-    int fx = std::max(1, int(mo.type->def->num("foot_x", 1)));
-    int fy = std::max(1, int(mo.type->def->num("foot_y", 1)));
     bool mobile = mo.type->def->hasFlag("walker") || mo.type->name == "priest";
-    o.cellX = mobile ? mo.cellX : mo.cellX - fx + 1;
-    o.cellY = mobile ? mo.cellY : mo.cellY - fy + 1;
-    o.animOffset = float((mo.cellX * 7 + mo.cellY * 13) % 10) * 0.1f;
-    objects_.push_back(o);
+    sim_->spawn(mo.type, mo.owner, mobile ? mo.cellX + 0.5f : float(mo.cellX), mobile ? mo.cellY + 0.5f : float(mo.cellY));
   }
+  startSim(3000);
   frame(float(mw.minX * kCellW), float(mw.minY * kCellH), float((mw.maxX + 1) * kCellW),
         float((mw.maxY + 1) * kCellH + 40));
   return true;
 }
 
+// Common setup once a world + entities exist: starting Storm Power and a pair
+// of golems at every temple.
+void WorldView::startSim(float startPower) {
+  selectedWorkshop_ = dropIndex_ = -1;
+  for (int p = 0; p <= 8; ++p) sim_->player(p).power = startPower;
+  const TypeInfo* golem = gd_.registry.byName("sunWalker");
+  if (!golem) return;
+  std::vector<Entity> temples;
+  for (auto& e : sim_->entities())
+    if (e.role == Role::Temple && e.owner > 0) temples.push_back(e);
+  for (auto& t : temples) {
+    int fx = std::max(1, int(t.type->def->num("foot_x", 1)));
+    for (int k = 0; k < 2; ++k) sim_->spawn(golem, t.owner, t.x - fx / 2 + k + 0.5f, t.y + 1.5f);
+  }
+}
 void WorldView::buildTestScene(uint32_t seed) {
+  // One world grid with four blob islands stamped in (same layout as before).
   islands_.clear();
-  objects_.clear();
-  // Grass type is per island (the original mixes them freely; player
-  // islands are usually the green set).
+  Island world(80, 60);
   const Element els[4] = {Element::Sun, Element::Wind, Element::Rain, Element::Thunder};
-  const int pos[4][2] = {{0, 0}, {30, -4}, {4, 26}, {34, 24}};
+  const int pos[4][2] = {{4, 6}, {34, 2}, {8, 32}, {38, 30}};
+  const int owners[4] = {1, 0, 0, 2};
   for (int i = 0; i < 4; ++i) {
-    Island isl = makeBlobIsland(22 + int(seed % 3) * 2, 18, els[i], seed * 31 + i * 7);
-    isl.worldX = pos[i][0] * kCellW;
-    isl.worldY = pos[i][1] * kCellH;
-    isl.owner = i == 0 ? 1 : (i == 3 ? 2 : 0);
-    islands_.push_back(std::move(isl));
+    Island blob = makeBlobIsland(22 + int(seed % 3) * 2, 18, els[i], seed * 31 + i * 7);
+    for (int y = 0; y < blob.height(); ++y)
+      for (int x = 0; x < blob.width(); ++x)
+        if (blob.filled(x, y)) {
+          world.set(pos[i][0] + x, pos[i][1] + y, blob.at(x, y));
+          world.setOwner(pos[i][0] + x, pos[i][1] + y, owners[i]);
+        }
   }
-  // Frame the whole layout.
-  float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
-  for (auto& isl : islands_) {
-    minx = std::min(minx, float(isl.worldX));
-    miny = std::min(miny, float(isl.worldY));
-    maxx = std::max(maxx, float(isl.worldX + isl.width() * kCellW));
-    maxy = std::max(maxy, float(isl.worldY + isl.height() * kCellH + 40));
-  }
-  cam_.x = (minx + maxx) / 2;
-  cam_.y = (miny + maxy) / 2;
-  cam_.zoom = std::min(cam_.screenW * 0.92f / (maxx - minx), cam_.screenH * 0.92f / (maxy - miny));
-  auto add = [&](const char* type, int island, int cx, int cy, const char* cluster = "", int team = 0) {
+  islands_.push_back(std::move(world));
+  sim_ = std::make_unique<Sim>(gd_, islands_[0]);
+  player_ = 1;
+  // add(type, island, footprint top-left cell)
+  auto add = [&](const char* type, int island, int cx, int cy) {
     const TypeInfo* t = gd_.registry.byName(type);
     if (!t || !t->def) return;
-    PlacedObject o;
-    o.type = t;
-    o.island = island;
-    o.cellX = cx;
-    o.cellY = cy;
-    o.cluster = cluster;
-    o.team = team;
-    o.animOffset = float((cx * 7 + cy * 13) % 10) * 0.1f;
-    objects_.push_back(o);
+    int fx = std::max(1, int(t->def->num("foot_x", 1))), fy = std::max(1, int(t->def->num("foot_y", 1)));
+    int owner = owners[island];
+    bool mobile = t->def->hasFlag("walker");
+    float ax = mobile ? pos[island][0] + cx + 0.5f : float(pos[island][0] + cx + fx - 1);
+    float ay = mobile ? pos[island][1] + cy + 0.5f : float(pos[island][1] + cy + fy - 1);
+    if (t->def->hasFlag("geyser")) owner = 0;
+    sim_->spawn(t, owner, ax, ay);
   };
-  // Island 0: a thunder base like the reference screenshot (red player).
-  add("thunderFactory", 0, 8, 3);
-  add("thunderArcher", 0, 4, 6);
-  add("thunderArcher", 0, 15, 5);
-  add("thunderArcher", 0, 12, 10);
-  add("thunderFence", 0, 4, 11);
-  add("thunderFence", 0, 17, 9);
-  add("priest", 0, 11, 13);
-  // The others: one of each fury (blue player owns island 3).
-  add("windFactory", 1, 6, 4);
-  add("windArcher", 1, 13, 9);
-  add("geyser", 1, 4, 10);
-  add("sunFactory", 1, 13, 2);
-  add("rainFactory", 2, 6, 5);
-  add("rainBlocker", 2, 13, 10);
-  add("rainCannon", 2, 5, 11);
+  // Red player (1): thunder base with temple, workshop, generator, geyser.
+  add("thunderFactory", 0, 3, 3);
+  add("rainVortex", 0, 12, 2);
+  add("thunderBattery", 0, 4, 10);
+  add("thunderArcher", 0, 15, 10);
+  add("geyser", 0, 9, 12);
+  add("priest", 0, 11, 9);
+  // Neutral islands with geysers to claim by bridge.
+  add("geyser", 1, 8, 6);
+  add("geyser", 1, 14, 9);
+  add("geyser", 2, 9, 7);
+  // Blue player (2).
+  add("sunFactory", 3, 4, 3);
   add("sunArcher", 3, 13, 10);
   add("sunCannon", 3, 5, 11);
-  add("windBattery", 3, 9, 6);
-  add("altar", 3, 15, 4);
+  add("windBattery", 3, 12, 4);
+  startSim(3000);
+  frame(0, 0, float(world.width() * kCellW), float(world.height() * kCellH + 40));
 }
-
 void WorldView::handle(const SDL_Event& e) {
   switch (e.type) {
     case SDL_QUIT: quit_ = true; break;
     case SDL_KEYDOWN:
       switch (e.key.keysym.sym) {
-        case SDLK_ESCAPE: quit_ = true; break;
+        case SDLK_ESCAPE:
+          if (selectedWorkshop_ >= 0 || dropIndex_ >= 0) selectedWorkshop_ = dropIndex_ = -1;
+          else quit_ = true;
+          break;
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: queue_.rotate(); break;
         case SDLK_b: autoBuild(1); break;  // let the AI place one piece
@@ -199,10 +202,30 @@ void WorldView::handle(const SDL_Event& e) {
       }
       break;
     case SDL_MOUSEBUTTONUP:
-      if (leftDown_ && !moved_ && hoverX_ >= 0 && !islands_.empty() &&
-          canPlaceBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_)) {
-        placeBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_);
-        queue_.next();
+      if (leftDown_ && !moved_ && !islands_.empty()) {
+        int sx = e.button.x, sy = e.button.y;
+        if (handleUiClick(sx, sy)) {
+          // HUD button
+        } else if (dropIndex_ >= 0 && sim_) {
+          const auto& ready = sim_->player(player_).ready;
+          if (dropIndex_ < int(ready.size())) {
+            const TypeInfo* t = gd_.registry.byName(ready[size_t(dropIndex_)]);
+            int fx = std::max(1, int(t->def->num("foot_x", 1))), fy = std::max(1, int(t->def->num("foot_y", 1)));
+            float wx, wy;
+            cam_.screenToWorld(sx, sy, wx, wy);
+            int ax = int(std::floor(wx / kCellW)) + fx / 2, ay = int(std::floor(wy / kCellH)) + fy / 2;
+            if (sim_->dropUnit(player_, dropIndex_, ax, ay)) dropIndex_ = -1;
+            else message_ = "CANT DROP THERE - NEEDS OPEN SKY NEXT TO YOUR LAND", messageTime_ = time_;
+          } else {
+            dropIndex_ = -1;
+          }
+        } else if (const Entity* ent = entityAtScreen(sx, sy);
+                   ent && ent->role == Role::Workshop && ent->owner == player_) {
+          selectedWorkshop_ = ent->id;
+        } else if (hoverX_ >= 0 && canPlaceBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_)) {
+          placeBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_);
+          queue_.next();
+        }
       }
       dragging_ = leftDown_ = false;
       break;
@@ -223,6 +246,13 @@ void WorldView::handle(const SDL_Event& e) {
 
 void WorldView::update(double dt) {
   time_ += dt;
+  if (sim_) {
+    simAcc_ += std::min(dt, 0.25);
+    while (simAcc_ >= Sim::kDt) {
+      sim_->step();
+      simAcc_ -= Sim::kDt;
+    }
+  }
   // Keyboard / Steam Deck d-pad panning.
   const Uint8* k = SDL_GetKeyboardState(nullptr);
   float sp = float(400 * dt / cam_.zoom);
@@ -332,20 +362,17 @@ void WorldView::drawIsland(const Island& isl) {
 
 // Buildings anchor at the bottom-right pixel of their footprint, like tiles.
 // Mobile units (priest etc.) anchor at their feet, centre of the cell.
-void WorldView::anchorOf(const PlacedObject& o, float& wx, float& wy) const {
-  const Island& isl = islands_[o.island];
-  int fx = std::max(1, int(o.type->def->num("foot_x", 1)));
-  int fy = std::max(1, int(o.type->def->num("foot_y", 1)));
-  bool mobile = o.type->def->hasFlag("walker") || o.type->name == "priest";
+void WorldView::anchorOf(const Entity& e, float& wx, float& wy) const {
+  const Island& isl = islands_[0];
+  bool mobile = e.type->def->hasFlag("walker") || e.role == Role::Golem || e.role == Role::Priest;
   if (mobile) {
-    wx = isl.worldX + (o.cellX + 0.5f) * kCellW;
-    wy = isl.worldY + isl.bob + (o.cellY + 0.5f) * kCellH;
+    wx = isl.worldX + e.x * kCellW;
+    wy = isl.worldY + isl.bob + e.y * kCellH;
   } else {
-    wx = isl.worldX + float(o.cellX + fx) * kCellW - 1;
-    wy = isl.worldY + isl.bob + float(o.cellY + fy) * kCellH - 1;
+    wx = isl.worldX + (e.x + 1) * kCellW - 1;
+    wy = isl.worldY + isl.bob + (e.y + 1) * kCellH - 1;
   }
 }
-
 int WorldView::autoBuild(int pieces) {
   if (islands_.empty()) return 0;
   int placed = 0;
@@ -427,32 +454,175 @@ void WorldView::drawBuildUi() {
   }
 }
 
+std::string WorldView::demoProduction() {
+  if (!sim_) return "";
+  for (auto& e : sim_->entities()) {
+    if (e.role != Role::Workshop || e.owner != player_) continue;
+    selectedWorkshop_ = e.id;
+    for (auto* t : sim_->buildable(e.id))
+      if (sim_->startBuild(e.id, t->name)) return t->name;
+  }
+  return "";
+}
+
+const Entity* WorldView::entityAtScreen(int sx, int sy) const {
+  if (!sim_) return nullptr;
+  float wx, wy;
+  cam_.screenToWorld(sx, sy, wx, wy);
+  int cx = int(std::floor(wx / kCellW)), cy = int(std::floor(wy / kCellH));
+  for (auto& e : sim_->entities()) {
+    if (!e.alive || !e.type || !e.type->def) continue;
+    int fx = std::max(1, int(e.type->def->num("foot_x", 1))), fy = std::max(1, int(e.type->def->num("foot_y", 1)));
+    if (cx > int(e.x) - fx && cx <= int(e.x) && cy > int(e.y) - fy && cy <= int(e.y)) return &e;
+  }
+  return nullptr;
+}
+
+bool WorldView::handleUiClick(int sx, int sy) {
+  for (auto& b : buttons_) {
+    if (sx < b.r.x || sy < b.r.y || sx > b.r.x + b.r.w || sy > b.r.y + b.r.h) continue;
+    if (b.action.rfind("build:", 0) == 0 && sim_) {
+      std::string why;
+      if (!sim_->startBuild(selectedWorkshop_, b.action.substr(6), &why)) {
+        for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
+        message_ = why;
+        messageTime_ = time_;
+      }
+    } else if (b.action.rfind("drop:", 0) == 0) {
+      dropIndex_ = std::atoi(b.action.c_str() + 5);
+      selectedWorkshop_ = -1;
+    } else if (b.action == "close") {
+      selectedWorkshop_ = -1;
+    }
+    return true;
+  }
+  return false;
+}
+
+void WorldView::drawHud() {
+  if (!sim_) return;
+  SDL_Renderer* ren = r_.sdl();
+  buttons_.clear();
+  auto panel = [&](SDL_FRect r) {
+    SDL_SetRenderDrawColor(ren, 18, 18, 28, 210);
+    SDL_RenderFillRectF(ren, &r);
+    SDL_SetRenderDrawColor(ren, 160, 140, 100, 255);
+    SDL_RenderDrawRectF(ren, &r);
+  };
+  const SDL_Color gold{255, 220, 110, 255}, white{235, 235, 235, 255}, grey{150, 150, 150, 255},
+      red{255, 90, 80, 255};
+  PlayerState& me = sim_->player(player_);
+  // Storm Power (yellow under 2000, red under 1000, like the original).
+  panel({150, 12, 330, 34});
+  SDL_Color pc = me.power < 1000 ? red : me.power < 2000 ? SDL_Color{255, 230, 60, 255} : white;
+  float x = drawText(ren, 160, 21, 2, "STORM POWER ", gold);
+  drawText(ren, 160 + x, 21, 2, std::to_string(int(me.power)), pc);
+
+  // Ready units waiting to be dropped.
+  float ry = 56;
+  for (size_t i = 0; i < me.ready.size() && i < 6; ++i) {
+    SDL_FRect r{150, ry, 330, 26};
+    panel(r);
+    std::string label = "PLACE " + me.ready[i];
+    drawText(ren, 158, ry + 6, 2, label, dropIndex_ == int(i) ? gold : white);
+    buttons_.push_back({r, "drop:" + std::to_string(i)});
+    ry += 30;
+  }
+
+  // Production menu for the selected workshop.
+  if (Entity* w = sim_->find(selectedWorkshop_)) {
+    auto list = sim_->buildable(w->id);
+    float pw = 380, px = float(cam_.screenW) - pw - 12, py = 12;
+    float ph = 60 + 30.0f * float(list.size()) + 30;
+    panel({px, py, pw, ph});
+    drawText(ren, px + 10, py + 10, 2, w->type->name, gold);
+    SDL_FRect close{px + pw - 30, py + 6, 22, 22};
+    drawText(ren, close.x + 5, close.y + 4, 2, "X", red);
+    buttons_.push_back({close, "close"});
+    if (!w->building.empty()) {
+      const TypeInfo* t = gd_.registry.byName(w->building);
+      float total = t ? std::max(4.0f, float(t->def->num("cost", 400)) / 50.0f) : 8.0f;
+      drawText(ren, px + 10, py + 34, 2, "BUILDING " + w->building, white);
+      SDL_FRect bar{px + 10, py + 52, (pw - 20) * std::min(1.0f, w->progress / total), 4};
+      SDL_SetRenderDrawColor(ren, 255, 220, 110, 255);
+      SDL_RenderFillRectF(ren, &bar);
+    } else {
+      drawText(ren, px + 10, py + 34, 2, "CHOOSE A UNIT", grey);
+    }
+    float y = py + 64;
+    for (auto* t : list) {
+      SDL_FRect r{px + 8, y, pw - 16, 26};
+      int cost = int(t->def->num("cost", 0));
+      int need = int(t->def->num("minUsage", 0));
+      int have = sim_->energyAt(player_, t->def->str("theme"), int(w->x), int(w->y));
+      bool affordable = me.power >= cost && (need <= 0 || have >= need) && w->building.empty();
+      SDL_SetRenderDrawColor(ren, 40, 40, 55, 255);
+      SDL_RenderFillRectF(ren, &r);
+      drawText(ren, r.x + 6, y + 6, 2, t->name, affordable ? white : grey);
+      std::string c = std::to_string(cost);
+      drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
+      buttons_.push_back({r, "build:" + t->name});
+      y += 30;
+    }
+  }
+
+  // Drop ghost for the unit being placed.
+  if (dropIndex_ >= 0 && dropIndex_ < int(me.ready.size())) {
+    const TypeInfo* t = gd_.registry.byName(me.ready[size_t(dropIndex_)]);
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+    float wx, wy;
+    cam_.screenToWorld(mx, my, wx, wy);
+    int fx = std::max(1, int(t->def->num("foot_x", 1))), fy = std::max(1, int(t->def->num("foot_y", 1)));
+    int ax = int(std::floor(wx / kCellW)) + fx / 2, ay = int(std::floor(wy / kCellH)) + fy / 2;
+    bool ok = sim_->canDropUnit(t, ax, ay, player_);
+    SDL_FRect fp = cam_.toScreen(float((ax - fx + 1) * kCellW), float((ay - fy + 1) * kCellH), float(fx * kCellW),
+                                 float(fy * kCellH));
+    SDL_SetRenderDrawColor(ren, ok ? 80 : 255, ok ? 255 : 70, 80, 90);
+    SDL_RenderFillRectF(ren, &fp);
+    const SpriteTex& st = cache_.get(t->set, 0);
+    if (st.tex) {
+      SDL_SetTextureAlphaMod(st.tex, 180);
+      blit(st, float((ax + 1) * kCellW - 1), float((ay + 1) * kCellH - 1));
+      SDL_SetTextureAlphaMod(st.tex, 255);
+    }
+  }
+
+  if (!message_.empty() && time_ - messageTime_ < 3.0) {
+    float w = float(message_.size()) * 12 + 20;
+    panel({(cam_.screenW - w) / 2, float(cam_.screenH) - 50, w, 30});
+    drawText(ren, (cam_.screenW - w) / 2 + 10, float(cam_.screenH) - 42, 2, message_, red);
+  }
+}
+
 void WorldView::drawObjects() {
   struct Item {
     float y;
-    const PlacedObject* o;
+    const Entity* o;
   };
   std::vector<Item> order;
-  for (auto& o : objects_) {
+  if (!sim_) return;
+  for (auto& o : sim_->entities()) {
+    if (!o.alive || !o.type || !o.type->def || o.type->set < 0) continue;
     float wx, wy;
     anchorOf(o, wx, wy);
     order.push_back({wy, &o});
   }
   std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.y < b.y; });
 
-  auto baseFor = [&](const PlacedObject& o) {
+  auto baseFor = [&](const Entity& o) {
     const auto& frames = o.type->def->frames;
     for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
       if (frames[i].label.find("baseframe") != std::string::npos) return int(i);
     return -1;
   };
-  auto frameFor = [&](const PlacedObject& o) {
+  auto frameFor = [&](const Entity& o) {
     const auto& frames = o.type->def->frames;
     // Animate through consecutive frame lines of the first cluster. For types
     // with a "baseframe", these are overlays drawn on top of the base.
     // Default cluster: the line labelled "default", else the first line that
     // isn't a help/info picture.
-    std::string cl = o.cluster;
+    std::string cl;
     if (cl.empty()) {
       for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
         if (frames[i].label.find("default") != std::string::npos) {
@@ -480,7 +650,7 @@ void WorldView::drawObjects() {
 
   // Shadows under everything, then the objects back to front.
   for (auto& it : order) {
-    const PlacedObject& o = *it.o;
+    const Entity& o = *it.o;
     int base = baseFor(o);
     int line = base >= 0 ? base : frameFor(o);
     int sf = o.type->shadowFrame(line);
@@ -490,13 +660,19 @@ void WorldView::drawObjects() {
     blit(cache_.shadow(o.type->set, sf), wx, wy);
   }
   for (auto& it : order) {
-    const PlacedObject& o = *it.o;
+    const Entity& o = *it.o;
     float wx, wy;
     anchorOf(o, wx, wy);
     int base = baseFor(o);
     int anim = frameFor(o);
-    if (base >= 0) blit(cache_.get(o.type->set, o.type->frame(base), o.team), wx, wy);
-    if (anim != base) blit(cache_.get(o.type->set, o.type->frame(anim), o.team), wx, wy);
+    if (base >= 0) blit(cache_.get(o.type->set, o.type->frame(base)), wx, wy);
+    if (anim != base) blit(cache_.get(o.type->set, o.type->frame(anim)), wx, wy);
+    // A golem carrying a crystal shows a little gold marker.
+    if (o.role == Role::Golem && o.carrying) {
+      SDL_FRect d = cam_.toScreen(wx - 2, wy - 16, 4, 4);
+      SDL_SetRenderDrawColor(r_.sdl(), 255, 220, 80, 255);
+      SDL_RenderFillRectF(r_.sdl(), &d);
+    }
   }
 }
 
@@ -504,7 +680,8 @@ void WorldView::draw() {
   drawSky();
   for (auto& isl : islands_) drawIsland(isl);
   drawObjects();
-  drawBuildUi();
+  if (dropIndex_ < 0) drawBuildUi();
+  drawHud();
   char t[256];
   std::snprintf(t, sizeof t,
                 "NetStorm Port - %s  zoom %.2fx  [M/[ ] missions, N test layout, wheel zoom, drag pan, G grid, "

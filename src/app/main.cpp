@@ -20,6 +20,8 @@ int main(int argc, char** argv) {
   bool worldMode = true;
   std::string mission;
   int autobuild = 0;
+  double simulate = 0;
+  bool demo = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -32,6 +34,8 @@ int main(int argc, char** argv) {
     else if (a == "--fullscreen") wc.fullscreenDesktop = true;
     else if (a == "--mission") mission = next();
     else if (a == "--autobuild") autobuild = std::atoi(next().c_str());
+    else if (a == "--simulate") simulate = std::atof(next().c_str());
+    else if (a == "--demo") demo = true;
     else if (a == "--screenshot") shot = next();
     else if (a == "--size") {
       std::string s = next();
@@ -69,6 +73,25 @@ int main(int argc, char** argv) {
   if (!mission.empty() && !world.loadMissionByName(mission))
     std::fprintf(stderr, "mission '%s' not found\n", mission.c_str());
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
+  if (demo) std::printf("demo: started building %s\n", world.demoProduction().c_str());
+  if (simulate > 0) {
+    float before = world.sim() ? world.sim()->player(world.player()).power : 0;
+    for (double t = 0; t < simulate; t += 1.0 / 30) world.update(1.0 / 30);
+    if (world.sim()) {
+      auto& p = world.sim()->player(world.player());
+      // Drop the first ready unit at the first legal spot (tests the drop path).
+      if (!p.ready.empty()) {
+        bool dropped = false;
+        for (int y = 2; y < 200 && !dropped; ++y)
+          for (int x = 2; x < 200 && !dropped; ++x)
+            if (world.sim()->canDropUnit(gd.registry.byName(p.ready[0]), x, y, world.player()))
+              dropped = world.sim()->dropUnit(world.player(), 0, x, y);
+        std::printf("dropped ready unit: %s\n", dropped ? "yes" : "no");
+      }
+      std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d, units ready %zu\n",
+                  simulate, world.player(), before, p.power, p.delivered, p.ready.size());
+    }
+  }
 
   if (!shot.empty()) {
     if (worldMode) world.draw();

@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
   bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
   int stopAtAir = 0;
   bool testGift = false;
+  bool stopAtBalloon = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -72,6 +73,7 @@ int main(int argc, char** argv) {
     else if (a == "--demo") demo = true;
     else if (a == "--stop-at-note") stopAtNote = true;
     else if (a == "--test-gift") testGift = true;
+    else if (a == "--stop-at-balloon") stopAtBalloon = true;
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
@@ -172,6 +174,13 @@ int main(int argc, char** argv) {
       k.type = SDL_KEYDOWN;
       k.key.keysym.sym = SDLK_RETURN;  // picks the harmless option
       if (stopAtNote && world.hasDialog()) break;
+      if (stopAtBalloon && world.balloonsAirborne() > 0 && t > 20) {
+        static double seen = t;
+        if (t - seen > 12) {  // let it get underway
+          world.focusOnBalloon();
+          break;
+        }
+      }
       if (stopAtAir > 0 && world.flyersAirborne() >= stopAtAir) {
         world.focusOnAir();
         break;

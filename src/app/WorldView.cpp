@@ -644,6 +644,15 @@ bool WorldView::handleUiClick(int sx, int sy) {
         message_ = why;
         messageTime_ = time_;
       }
+    } else if (b.action == "upgrade" && sim_) {
+      std::string why;
+      if (!sim_->upgradeWorkshop(selectedWorkshop_, &why)) {
+        for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
+        message_ = why;
+      } else {
+        message_ = "WORKSHOP UPGRADED";
+      }
+      messageTime_ = time_;
     } else if (b.action.rfind("drop:", 0) == 0) {
       dropIndex_ = std::atoi(b.action.c_str() + 5);
       selectedWorkshop_ = -1;
@@ -726,9 +735,10 @@ void WorldView::drawHud() {
   if (Entity* w = sim_->find(selectedWorkshop_)) {
     auto list = sim_->buildable(w->id);
     float pw = 380, px = float(cam_.screenW) - pw - 12, py = 12;
-    float ph = 60 + 30.0f * float(list.size()) + 30;
+    bool slotsOn = sim_->knowledgeGifts;
+    float ph = 60 + 30.0f * float(list.size()) + 30 + (slotsOn ? 60 : 0);
     panel({px, py, pw, ph});
-    drawText(ren, px + 10, py + 10, 2, w->type->name, gold);
+    drawText(ren, px + 10, py + 10, 2, w->type->name + (slotsOn ? " LV " + std::to_string(w->workshopLevel) : ""), gold);
     SDL_FRect close{px + pw - 30, py + 6, 22, 22};
     drawText(ren, close.x + 5, close.y + 4, 2, "X", red);
     buttons_.push_back({close, "close"});
@@ -751,11 +761,30 @@ void WorldView::drawHud() {
       bool affordable = me.power >= cost && (need <= 0 || have >= need) && w->building.empty();
       SDL_SetRenderDrawColor(ren, 40, 40, 55, 255);
       SDL_RenderFillRectF(ren, &r);
-      drawText(ren, r.x + 6, y + 6, 2, t->name, affordable ? white : grey);
+      bool committed = std::find(w->slots.begin(), w->slots.end(), t->name) != w->slots.end();
+      drawText(ren, r.x + 6, y + 6, 2, (slotsOn ? (committed ? "* " : "+ ") : "") + t->name, affordable ? white : grey);
       std::string c = std::to_string(cost);
       drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
       buttons_.push_back({r, "build:" + t->name});
       y += 30;
+    }
+    if (slotsOn) {  // production slots + upgrade
+      std::string slotsTxt = "SLOTS " + std::to_string(w->slots.size()) + "/" + std::to_string(sim_->slotCapacity(*w)) +
+                             "   (* COMMITTED, + USES A SLOT)";
+      drawText(ren, px + 10, y + 4, 2, slotsTxt, grey);
+      y += 24;
+      SDL_FRect r{px + 8, y, pw - 16, 26};
+      SDL_SetRenderDrawColor(ren, 55, 45, 30, 255);
+      SDL_RenderFillRectF(ren, &r);
+      if (w->workshopLevel < 4) {
+        int cost = sim_->upgradeCost(*w);
+        drawText(ren, r.x + 6, y + 6, 2, "UPGRADE (+1 SLOT)", me.power >= cost ? gold : grey);
+        std::string c = std::to_string(cost);
+        drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
+        buttons_.push_back({r, "upgrade"});
+      } else {
+        drawText(ren, r.x + 6, y + 6, 2, "FULLY UPGRADED", grey);
+      }
     }
   }
 
@@ -949,6 +978,7 @@ void WorldView::drawObjects() {
     const Entity& o = *it.o;
     float wx, wy;
     anchorOf(o, wx, wy);
+    if (o.air) wy -= 24 + float(std::sin(time_ * 2 + o.id)) * 2;  // balloons float above their shadow
     int base = baseFor(o);
     int anim = frameFor(o);
     auto drawFrame = [&](int line) {
@@ -1357,6 +1387,24 @@ void WorldView::debugGrantGift() {
   int id = sim_->spawn(altar, player_, t->x + 8, t->y);
   sim_->find(id)->altarLevel = 2;
   sim_->player(player_).giftAltar = id;
+}
+
+int WorldView::balloonsAirborne() const {
+  int n = 0;
+  if (sim_)
+    for (auto& e : sim_->entities()) n += e.alive && e.air;
+  return n;
+}
+
+void WorldView::focusOnBalloon() {
+  if (!sim_) return;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.air && e.job != Entity::Job::Idle) {
+      cam_.x = islands_[0].worldX + e.x * kCellW;
+      cam_.y = islands_[0].worldY + e.y * kCellH - 10;
+      cam_.zoom = 3.0f;
+      return;
+    }
 }
 
 }  // namespace ns

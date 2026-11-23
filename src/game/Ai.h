@@ -29,6 +29,7 @@ class SkirmishAi {
   uint32_t seed_;
   int tick_ = 0;
   int bridgeEvery_ = 30;
+  const Island* world_ = nullptr;
 };
 
 }  // namespace ns

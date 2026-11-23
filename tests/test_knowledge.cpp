@@ -63,6 +63,31 @@ int main(int argc, char** argv) {
   CHECK(has(sim.player(1).tech, "thundercannon"), "Thunder Cannons are now known");
   CHECK(!sim.find(altar) || !sim.find(altar)->alive, "Knowledge consumes the altar");
 
+  // Workshop production slots: 2 at level 1, +1 per upgrade.
+  sim.player(1).power = 20000;
+  sim.player(1).tech = {"sunarcher", "suncannon", "sunblocker", "sunbattery"};
+  int ws = sim.spawn(gd.registry.byName("sunFactory"), 1, 10, 10);
+  sim.spawn(gd.registry.byName("rainVortex"), 1, 14, 18);  // temple: energy for the build checks
+  auto finish = [&]() {
+    for (int i = 0; i < 400 && !sim.find(ws)->building.empty(); ++i) sim.step();
+    sim.player(1).ready.clear();
+  };
+  CHECK(sim.startBuild(ws, "sunArcher"), "first unit type takes slot 1");
+  finish();
+  CHECK(sim.startBuild(ws, "sunCannon"), "second unit type takes slot 2");
+  finish();
+  std::string why;
+  CHECK(!sim.startBuild(ws, "sunBlocker", &why), "third type refused: both slots committed");
+  CHECK(sim.buildable(ws).size() == 2, "a full workshop only offers its committed units");
+  CHECK(sim.startBuild(ws, "sunArcher"), "committed types can be rebuilt");
+  finish();
+  CHECK(sim.upgradeWorkshop(ws) && sim.find(ws)->workshopLevel == 2, "upgrade adds a level");
+  CHECK(sim.startBuild(ws, "sunBlocker"), "upgrade opens a third slot");
+  finish();
+  sim.upgradeWorkshop(ws);
+  sim.upgradeWorkshop(ws);
+  CHECK(!sim.upgradeWorkshop(ws), "only three upgrades per workshop");
+
   std::printf("%s\n", fails ? "SOME CHECKS FAILED" : "all checks passed");
   return fails ? 1 : 0;
 }

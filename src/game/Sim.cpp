@@ -25,6 +25,7 @@ Role roleFor(const TypeInfo* t) {
   if (d.hasFlag("vortex")) return Role::Temple;
   if (d.hasFlag("factory")) return Role::Workshop;
   if (d.hasFlag("walker") && t->name == "sunWalker") return Role::Golem;
+  if (d.hasFlag("balloon")) return Role::Golem;  // aerial transport: does a golem's jobs by air
   if (d.hasFlag("flyer")) return Role::Flyer;
   if (d.str("group") == "battery") return Role::Generator;
   if (d.hasFlag("emplacement")) return Role::Shooter;
@@ -40,6 +41,7 @@ int Sim::spawn(const TypeInfo* t, int owner, float x, float y) {
   e.x = x;
   e.y = y;
   e.maxHp = e.hp = t && t->def ? int(t->def->num("maxHitPoints", 100)) : 100;
+  e.air = t && t->def && t->def->hasFlag("balloon");
   e.animOffset = float((int(x) * 7 + int(y) * 13) % 10) * 0.1f;
   if (e.role == Role::Geyser) e.crystals = t->def ? int(t->def->num("cost", 2000)) : 2000;
   ents_.push_back(e);
@@ -206,7 +208,7 @@ void Sim::stepShooter(Entity& s) {
   float bestD = range * range;
   for (auto& e : ents_) {
     if (!e.alive || e.owner == 0 || allied(e.owner, s.owner) || e.role == Role::Geyser) continue;
-    if (e.role == Role::Flyer && !antiAir && !aviary) continue;
+    if ((e.role == Role::Flyer || e.air) && !antiAir && !aviary) continue;
     if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
     float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
     if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
@@ -398,6 +400,12 @@ std::vector<std::pair<int, int>> Sim::findPath(int sx, int sy, int tx, int ty, i
   return path;
 }
 
+std::vector<std::pair<int, int>> Sim::route(const Entity& e, int tx, int ty) const {
+  if (!e.air) return findPath(int(e.x), int(e.y), tx, ty, 0, 0);
+  if (tx < 0 || ty < 0 || tx >= world_.width() || ty >= world_.height()) return {};
+  return {{tx, ty}};  // balloons fly straight there
+}
+
 bool Sim::walkStep(Entity& g) {
   const float speed = g.type && g.type->def ? float(g.type->def->num("speed", 1.8)) : 1.8f;
   {
@@ -427,7 +435,7 @@ void Sim::stepGolem(Entity& g) {
   auto planTo = [&](const Entity& b) {
     int cx, cy;
     approach(b, cx, cy);
-    g.path = findPath(int(g.x), int(g.y), cx, cy, 0, 0);
+    g.path = route(g, cx, cy);
     return !g.path.empty() || (int(g.x) == cx && int(g.y) == cy);
   };
 
@@ -447,7 +455,9 @@ void Sim::stepGolem(Entity& g) {
       int best = -1;
       for (auto& e : ents_) {
         if (!e.alive || e.role != Role::Geyser || e.crystals <= 0) continue;
-        if (world_.ownerAt(int(e.x), int(e.y)) != g.owner) continue;  // only geysers we hold
+        int own = world_.ownerAt(int(e.x), int(e.y));
+        // Golems mine geysers we hold; balloons can also reach unclaimed ones by air.
+        if (own != g.owner && !(g.air && (own == 0 || allied(own, g.owner)))) continue;
         float d = std::abs(e.x - g.x) + std::abs(e.y - g.y);
         if (d < bestD) bestD = d, best = e.id;
       }
@@ -490,7 +500,7 @@ void Sim::stepGolem(Entity& g) {
       }
       if (!walk()) break;
       if (std::abs(g.x - pr->x) + std::abs(g.y - pr->y) > 2.5f) {  // he moved: re-plan
-        g.path = findPath(int(g.x), int(g.y), int(pr->x), int(pr->y), 0, 0);
+        g.path = route(g, int(pr->x), int(pr->y));
         if (g.path.empty()) g.job = Entity::Job::Idle;
         break;
       }
@@ -508,7 +518,7 @@ void Sim::stepGolem(Entity& g) {
       g.target = altar->id;
       int cx, cy;
       approach(*altar, cx, cy);
-      g.path = findPath(int(g.x), int(g.y), cx, cy, 0, 0);
+      g.path = route(g, cx, cy);
       g.job = Entity::Job::ToAltar;
       break;
     }
@@ -593,8 +603,13 @@ std::vector<const TypeInfo*> Sim::buildable(int workshopId) const {
       if (std::find(tech.begin(), tech.end(), ln) == tech.end()) continue;
     }
     bool unit = t->def->hasFlag("emplacement") || (t->def->hasFlag("walker") && t->name != "sunWalker") ||
+                t->def->hasFlag("balloon") ||
                 t->def->hasFlag("flyer") || t->def->str("group") == "battery";
-    if (unit) out.push_back(t);
+    if (!unit) continue;
+    if (knowledgeGifts && roleFor(t) != Role::Golem && int(w->slots.size()) >= 1 + w->workshopLevel &&
+        std::find(w->slots.begin(), w->slots.end(), t->name) == w->slots.end())
+      continue;  // slots full: only what this workshop is committed to
+    out.push_back(t);
   }
   return out;
 }
@@ -611,13 +626,40 @@ bool Sim::startBuild(int workshopId, const std::string& unitType, std::string* w
   if (!w->building.empty()) return fail("workshop busy");
   float cost = float(t->def->num("cost", 0));
   PlayerState& p = players_[size_t(w->owner)];
+  bool newSlot = false;
+  if (knowledgeGifts && roleFor(t) != Role::Golem) {
+    newSlot = std::find(w->slots.begin(), w->slots.end(), t->name) == w->slots.end();
+    if (newSlot && int(w->slots.size()) >= slotCapacity(*w)) return fail("no free production slot - upgrade the workshop");
+  }
   if (p.power < cost) return fail("not enough Storm Power");
   int need = int(t->def->num("minUsage", 0));
   if (need > 0 && energyAt(w->owner, t->def->str("theme"), int(w->x), int(w->y)) < need)
     return fail("not enough energy");
   p.power -= cost;
+  if (newSlot) w->slots.push_back(t->name);
   w->building = t->name;
   w->progress = 0;
+  return true;
+}
+
+int Sim::upgradeCost(const Entity& w) const {
+  return int(w.type->def->num("cost", 600) / 2) * w.workshopLevel;
+}
+
+bool Sim::upgradeWorkshop(int id, std::string* why) {
+  Entity* w = find(id);
+  auto fail = [&](const char* m) {
+    if (why) *why = m;
+    return false;
+  };
+  if (!w || w->role != Role::Workshop || w->built < 1) return fail("not a finished workshop");
+  if (w->workshopLevel >= 4) return fail("already fully upgraded");
+  int cost = upgradeCost(*w);
+  PlayerState& p = players_[size_t(w->owner)];
+  if (p.power < cost) return fail("not enough Storm Power");
+  p.power -= float(cost);
+  w->workshopLevel++;
+  log("P" + std::to_string(w->owner) + " upgraded a " + w->type->name + " to level " + std::to_string(w->workshopLevel));
   return true;
 }
 
@@ -627,13 +669,13 @@ void Sim::stepWorkshop(Entity& w) {
   float buildTime = t && t->def ? std::max(4.0f, float(t->def->num("cost", 400)) / 50.0f) : 8.0f;
   w.progress += kDt;
   if (w.progress >= buildTime) {
-    if (t && t->def && t->def->hasFlag("walker") && roleFor(t) == Role::Golem) {
+    if (t && t->def && roleFor(t) == Role::Golem) {  // transports (golems, balloons) leave from the temple
       // Golems walk out of the temple rather than being dropped.
       int temple = w.id;
       for (auto& e : ents_)
         if (e.alive && e.owner == w.owner && e.role == Role::Temple) temple = e.id;
       spawnWalkerNear(t, w.owner, temple);
-      log("P" + std::to_string(w.owner) + " got a new golem");
+      log("P" + std::to_string(w.owner) + " got a new " + t->name);
     } else {
       players_[size_t(w.owner)].ready.push_back(w.building);
     }
@@ -697,7 +739,7 @@ bool Sim::orderMove(int id, int x, int y) {
   if (!w || (w->role != Role::Priest && w->role != Role::Golem)) return false;
   if (w->immobile || w->carriedBy >= 0 || w->chainedAt >= 0) return false;
   if (int(w->x) == x && int(w->y) == y) return true;  // already there
-  auto path = findPath(int(w->x), int(w->y), x, y, 0, 0);
+  auto path = route(*w, x, y);
   if (path.empty()) return false;
   w->path = path;
   w->job = Entity::Job::Moving;
@@ -779,7 +821,7 @@ bool Sim::orderCapture(int golemId, int priestId, std::string* why) {
   for (auto& e : ents_)
     if (e.alive && e.role == Role::Altar && e.owner == g->owner && e.built >= 1 && e.captive < 0) haveAltar = true;
   if (!haveAltar) return fail("you need a finished altar");
-  g->path = findPath(int(g->x), int(g->y), int(pr->x), int(pr->y), 0, 0);
+  g->path = route(*g, int(pr->x), int(pr->y));
   if (g->path.empty()) return fail("golem cant reach him");
   g->carrying = false;
   g->target = pr->id;

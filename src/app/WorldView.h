@@ -62,6 +62,8 @@ class WorldView {
   Sim* sim() { return sim_.get(); }
   std::string debugAi();
   int flyersAirborne() const;
+  int balloonsAirborne() const;
+  void focusOnBalloon();
   void focusOnAir();
   void debugGrantGift();  // test hook: give player 1 a finished sacrifice to choose a gift for  // test hook: centre the camera on the air fight  // per-player state dump for headless runs
   void setAiForMe(bool b) { aiForMe_ = b; }

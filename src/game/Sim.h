@@ -46,6 +46,8 @@ struct Entity {
   std::vector<std::pair<int, int>> path;
   // Workshop
   std::string building;  // type being built ("" = idle)
+  int workshopLevel = 1;           // upgraded up to 3 times
+  std::vector<std::string> slots;  // production slots committed (skirmish rules)
   float progress = 0;    // seconds done
   // Buildings under construction (0..1); not functional until 1.
   float built = 1.0f;
@@ -67,6 +69,7 @@ struct Entity {
   // Flyer (launched by an aviary; `home` = aviary, `target` = what it's attacking)
   float heading = 0;  // radians, 0 = east
   float life = 0;     // seconds left
+  bool air = false;   // balloons: airborne transport, flies straight, only anti-air can hit it
 };
 
 // A shot in flight. Damage is applied when it lands (deterministic: fixed
@@ -110,6 +113,8 @@ class Sim {
   // Spawns a walker on a free walkable cell next to building `nearId`.
   int spawnWalkerNear(const TypeInfo* t, int owner, int nearId);
   void step();  // one fixed tick
+  // Route for a mobile unit: straight line for airborne transports, else a walking path.
+  std::vector<std::pair<int, int>> route(const Entity& e, int tx, int ty) const;
   // Knowledge from sacrifice (skirmish/multiplayer). When enabled, a finished
   // sacrifice leaves a gift to choose: new Knowledge (consumes the altar) or an
   // altar upgrade. Starting Knowledge = every buildable unit with no techBit.
@@ -120,6 +125,11 @@ class Sim {
   bool chooseGift(int player, const std::string& unitOrUpgrade);  // "upgrade" or a unit name
   // Send a priest back to finish one of his player's half-built buildings.
   bool orderResume(int priestId, int buildingId);
+  // Workshop production slots (with knowledgeGifts): 2 at level 1, +1 per upgrade
+  // (max 3 upgrades). Building a new unit type commits a free slot for good.
+  int slotCapacity(const Entity& w) const { return 1 + w.workshopLevel; }
+  int upgradeCost(const Entity& w) const;  // estimate: half the workshop's cost x its level
+  bool upgradeWorkshop(int workshopId, std::string* why = nullptr);
   void stepFlyer(Entity& f);
   bool launchFlyer(Entity& aviary, Entity& target);
 

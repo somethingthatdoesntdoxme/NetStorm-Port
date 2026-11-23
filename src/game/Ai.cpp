@@ -6,8 +6,11 @@
 
 namespace ns {
 
+static std::string lowerStr(std::string s);
+
 void SkirmishAi::step(Sim& sim, Island& world) {
   ++tick_;
+  world_ = &world;
   if (tick_ % bridgeEvery_ == 7 % bridgeEvery_) {  // a bridge piece every few seconds
     int x, y;
     bool moved = bestBridgeMove(world, queue_, player_, x, y);
@@ -207,6 +210,38 @@ void SkirmishAi::produce(Sim& sim) {
   float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);
+  // A balloon when free geysers lie out of reach of our golems.
+  {
+    int balloons = 0;
+    for (auto& e : sim.entities()) balloons += e.alive && e.owner == player_ && e.air;
+    bool freeGeyser = false;
+    for (auto& g : sim.entities())
+      if (g.alive && g.role == Role::Geyser && g.crystals > 0 && world_ && world_->ownerAt(int(g.x), int(g.y)) == 0)
+        freeGeyser = true;
+    if (balloons < 1 && freeGeyser)
+      for (auto& w : sim.entities()) {
+        if (!w.alive || w.role != Role::Workshop || w.owner != player_ || !w.building.empty()) continue;
+        for (auto* t : sim.buildable(w.id))
+          if (t->def->hasFlag("balloon") && sim.player(player_).power >= float(t->def->num("cost", 0)) + 300 &&
+              sim.startBuild(w.id, t->name))
+            return;
+      }
+  }
+  // Upgrade a workshop whose slots are full when we know a better unit it could make.
+  if (sim.knowledgeGifts)
+    for (auto& w : sim.entities()) {
+      if (!w.alive || w.role != Role::Workshop || w.owner != player_ || w.built < 1 || w.workshopLevel >= 4) continue;
+      if (int(w.slots.size()) < sim.slotCapacity(w)) continue;
+      std::string theme = lowerStr(w.type->def->str("theme"));
+      bool wants = false;
+      for (auto& name : sim.player(player_).tech) {
+        const TypeInfo* t = sim.registryType(name);
+        if (t && t->def && lowerStr(t->def->str("theme")) == theme && t->def->num("range", 0) > 0 &&
+            std::find(w.slots.begin(), w.slots.end(), t->name) == w.slots.end())
+          wants = true;
+      }
+      if (wants && sim.player(player_).power >= float(sim.upgradeCost(w)) + 400 && sim.upgradeWorkshop(w.id)) return;
+    }
   if (sim.player(player_).ready.size() >= 2) return;  // place what we have first
   for (auto& w : sim.entities()) {
     if (!w.alive || w.role != Role::Workshop || w.owner != player_ || !w.building.empty()) continue;

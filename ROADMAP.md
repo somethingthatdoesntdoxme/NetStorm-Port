@@ -102,7 +102,8 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Flyers fly over everything, circle and strafe their target (hpPerSec), retarget within their aviary's reach, die when lifeSpan runs out or their aviary is destroyed.
 - Archers and aviaries can hit flyers; cannons can't. Flyers don't occupy ground cells.
 - Drawn in 8 directions, ~28px up, with their ground shadow.
-- Not yet: balloons (air transport), thunder aviary (no stats in data), exact flyer speed scale (data speed x4 cells/s, estimated).
+- Exact flyer speed scale is estimated (data speed x4 cells/s).
+- Thunder aviary ("Thunder Spire") is cut content in the original: its type has no cost/hp/range/fury and nothing references it, so it stays unbuildable.
 
 ## Knowledge from sacrifice (skirmish)
 - Start with every buildable unit that has no techBit in the data (Disc Throwers, Sun Cannons, Sun generator...); everything else is earned.
@@ -110,3 +111,14 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Campaign missions keep their own fixed Knowledge lists.
 - AI fixes found on the way: aim drops at buildings (not wandering golems), push bridges deeper when the foothold is too thin, send the nearest golem (even mid-haul) to capture, priests finish half-built buildings.
 - tests/test_knowledge.cpp covers the rules.
+
+## Balloons (aerial transports)
+- Sun Balloon / Air Ship / Cloud Floater do a golem's jobs by air: fly straight (no bridges), mine geysers we hold or unclaimed ones, carry captured priests. Built at their fury's workshop, leave from the temple. Only anti-air (archers, aviaries' flyers) can hit them. Drawn floating above their shadow.
+- AI buys one when it knows how and free geysers lie out of reach.
+- tests/test_air.cpp: golem can't cross open sky to a geyser, a balloon brings crystals back.
+
+## Workshop slots and upgrades (skirmish rules)
+- 2 production slots at level 1; building a new unit type commits a slot for good; +1 slot per upgrade, max 3 upgrades.
+- Upgrade cost is an estimate (half the workshop's cost x its level) - the original showed it in-game only.
+- Workshop menu shows level, slots (* committed, + would use a slot) and an Upgrade button. AI upgrades when its slots are full and it knows a better unit for that workshop.
+- Campaign missions don't use slots (their unit lists can be longer than 2).

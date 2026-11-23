@@ -15,6 +15,65 @@ void SkirmishAi::step(Sim& sim, Island& world) {
   }
   if (tick_ % 20 == 3) produce(sim);
   if (tick_ % 10 == 5) dropReady(sim, world);
+  if (tick_ % 40 == 11) priestWork(sim, world);
+}
+
+bool SkirmishAi::findSite(Sim& sim, Island& world, int priestId, const TypeInfo* t, int& bx, int& by) {
+  const Entity* pr = sim.find(priestId);
+  if (!pr) return false;
+  float best = 1e18f;
+  bool found = false;
+  for (int y = 1; y < world.height() - 1; y += 2)
+    for (int x = 1; x < world.width() - 1; x += 2) {
+      if (!world.filled(x, y) || world.ownerAt(x, y) != player_) continue;
+      float d = (x - pr->x) * (x - pr->x) + (y - pr->y) * (y - pr->y);
+      if (d >= best) continue;
+      if (sim.canConstruct(priestId, t, x, y)) best = d, bx = x, by = y, found = true;
+    }
+  return found;
+}
+
+void SkirmishAi::priestWork(Sim& sim, Island& world) {
+  Entity* priest = nullptr;
+  int workshops = 0, altars = 0, shooters = 0;
+  std::string fury;
+  for (auto& e : sim.entities()) {
+    if (!e.alive || e.owner != player_) continue;
+    if (e.role == Role::Priest && e.chainedAt < 0 && e.carriedBy < 0) priest = &e;
+    if (e.role == Role::Workshop) ++workshops;
+    if (e.role == Role::Altar) ++altars;
+    if (e.role == Role::Shooter) ++shooters;
+    if ((e.role == Role::Temple || e.role == Role::Workshop) && fury.empty()) fury = e.type->def->str("theme");
+  }
+  if (fury.empty() || fury == "Fire") fury = "sun";
+  // 1. Sacrifice: if we hold a captive, send our priest to the altar.
+  for (auto& a : sim.entities()) {
+    if (!a.alive || a.role != Role::Altar || a.owner != player_ || a.captive < 0 || !priest) continue;
+    if (std::abs(priest->x - (a.x - 3)) > 4 || std::abs(priest->y - (a.y - 3)) > 4)
+      if (priest->job == Entity::Job::Idle) sim.orderMove(priest->id, int(a.x) - 3, int(a.y) + 1);
+    return;
+  }
+  // 2. Capture: any immobilised enemy priest -> send an idle golem.
+  for (auto& pr : sim.entities()) {
+    if (!pr.alive || pr.role != Role::Priest || pr.owner == player_ || pr.owner == 0 || !pr.immobile) continue;
+    if (pr.carriedBy >= 0 || pr.chainedAt >= 0) continue;
+    bool already = false;
+    for (auto& g : sim.entities())
+      if (g.alive && g.role == Role::Golem && g.owner == player_ && g.target == pr.id) already = true;
+    if (already) continue;
+    for (auto& g : sim.entities())
+      if (g.alive && g.role == Role::Golem && g.owner == player_ && !g.carrying &&
+          sim.orderCapture(g.id, pr.id))
+        break;
+  }
+  if (!priest || priest->immobile || priest->job != Entity::Job::Idle) return;
+  // 3. Construction: a workshop if we have none, an altar once we're fighting.
+  const TypeInfo* want = nullptr;
+  if (workshops == 0) want = sim.registryType(fury + "Factory");
+  else if (altars == 0 && shooters >= 3) want = sim.registryType("altar");
+  if (!want) return;
+  int x, y;
+  if (findSite(sim, world, priest->id, want, x, y)) sim.orderConstruct(priest->id, want->name, x, y);
 }
 
 // Our territory cell closest to the nearest enemy building: where new
@@ -34,6 +93,11 @@ static bool frontPoint(Sim& sim, int player, float& fx, float& fy) {
 }
 
 void SkirmishAi::produce(Sim& sim) {
+  // Save up for an altar once we're fighting and don't have one.
+  int altars = 0, shooters = 0;
+  for (auto& e : sim.entities())
+    if (e.alive && e.owner == player_) altars += e.role == Role::Altar, shooters += e.role == Role::Shooter;
+  float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);
   for (auto& w : sim.entities()) {
@@ -44,17 +108,22 @@ void SkirmishAi::produce(Sim& sim) {
     // Generator first if this fury has no energy where the fighting is.
     if (sim.energyAt(player_, theme, int(px), int(py)) < 20) {
       for (auto* t : list)
-        if (t->def->str("group") == "battery" && sim.startBuild(w.id, t->name)) return;
+        if (t->def->str("group") == "battery" && sim.player(player_).power - float(t->def->num("cost", 0)) >= reserve &&
+            sim.startBuild(w.id, t->name))
+          return;
       continue;
     }
     // Otherwise cycle through affordable shooters.
-    std::vector<const TypeInfo*> shooters;
+    std::vector<const TypeInfo*> shooterTypes;
     for (auto* t : list)
-      if (t->def->num("range", 0) > 0) shooters.push_back(t);
-    if (shooters.empty()) continue;
-    size_t pick = (seed_ + uint32_t(tick_ / 20)) % shooters.size();
-    for (size_t k = 0; k < shooters.size(); ++k)
-      if (sim.startBuild(w.id, shooters[(pick + k) % shooters.size()]->name)) return;
+      if (t->def->num("range", 0) > 0) shooterTypes.push_back(t);
+    if (shooterTypes.empty()) continue;
+    size_t pick = (seed_ + uint32_t(tick_ / 20)) % shooterTypes.size();
+    for (size_t k = 0; k < shooterTypes.size(); ++k) {
+      const TypeInfo* t = shooterTypes[(pick + k) % shooterTypes.size()];
+      if (sim.player(player_).power - float(t->def->num("cost", 0)) < reserve) continue;
+      if (sim.startBuild(w.id, t->name)) return;
+    }
   }
 }
 

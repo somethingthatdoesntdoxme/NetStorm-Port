@@ -34,7 +34,8 @@ Deterministic fixed-tick simulation (needed for lockstep netplay).
 - [ ] Bridges: piece rotation, connection rules, cracking/hard variants
 - [x] Storm Power economy: golems mine geysers on your land and deliver to the temple (pathing over land + bridges)
 - [x] Workshops build units for Storm Power, energy check by fury, drop finished units into open sky
-- [ ] Exact build times, energy radius/falloff, golem/priest construction (temples, workshops, altars)
+- [x] Priest construction: workshops, temples, altars on your own land, walks there and builds
+- [ ] Exact build times, energy radius/falloff
 - [ ] Production slots per workshop level, tech levels / sacrifices / altar
 - [x] Shooters fire (range, hpPerSec, delayBetweenShots), need fury energy, missiles + cannon arcs
 - [x] Blockers stop direct fire, cannons break enemy bridges, destruction + explosions
@@ -43,7 +44,9 @@ Deterministic fixed-tick simulation (needed for lockstep netplay).
 - [ ] Flyers, balloons, walkers, vortices, spells (bombs: twister, meteor, graviton...)
 - [ ] Wind/rain/thunder/sun element rules
 - [x] Interim win condition: last player with buildings
-- [ ] Real win condition: capture + sacrifice the enemy priest
+- [x] Real win condition: immobilise the enemy priest (force field at 50%), capture with a golem,
+      chain at your altar, your priest wards 5 runes -> enemy eliminated (scripted test: tests/test_sacrifice.cpp)
+- [ ] Knowledge/altar upgrades from sacrifices, priest spells
 Method: stats come straight from the `.type` scripts; behaviour is matched by
 reading the decompiled engine (`tools/re`) and A/B testing against the original.
 

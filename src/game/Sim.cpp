@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <cstdio>
 #include <limits>
 
 namespace ns {
@@ -18,6 +19,7 @@ Role roleFor(const TypeInfo* t) {
   if (!t || !t->def) return Role::Static;
   const TypeDef& d = *t->def;
   if (d.hasFlag("priest")) return Role::Priest;
+  if (d.hasFlag("altar")) return Role::Altar;
   if (d.hasFlag("geyser")) return Role::Geyser;
   if (d.hasFlag("vortex")) return Role::Temple;
   if (d.hasFlag("factory")) return Role::Workshop;
@@ -58,6 +60,13 @@ int Sim::spawnWalkerNear(const TypeInfo* t, int owner, int nearId) {
   return spawn(t, owner, cx + 0.5f, cy + 0.5f);
 }
 
+void Sim::log(const std::string& m) {
+  char t[16];
+  std::snprintf(t, sizeof t, "[%ds] ", int(time_));
+  events_.push_back(t + m);
+  if (events_.size() > 200) events_.erase(events_.begin());
+}
+
 Entity* Sim::find(int id) {
   for (auto& e : ents_)
     if (e.id == id && e.alive) return &e;
@@ -73,6 +82,8 @@ void Sim::step() {
     if (e.role == Role::Golem) stepGolem(e);
     else if (e.role == Role::Workshop) stepWorkshop(e);
     else if (e.role == Role::Shooter) stepShooter(e);
+    else if (e.role == Role::Priest) stepPriest(e);
+    else if (e.role == Role::Altar) stepAltar(e);
   }
   stepProjectiles();
   for (auto& fx : effects_) fx.t += kDt;
@@ -85,11 +96,12 @@ void Sim::step() {
   if (!winner_) {
     std::array<int, 9> alive{};
     for (auto& e : ents_)
-      if (e.alive && e.owner > 0 && e.role != Role::Golem && e.role != Role::Geyser) alive[size_t(e.owner)]++;
+      if (e.alive && e.owner > 0 && !out_[size_t(e.owner)] && e.role != Role::Golem && e.role != Role::Geyser)
+        alive[size_t(e.owner)]++;
     int count = 0, last = 0;
     for (int p = 1; p <= 8; ++p)
       if (alive[size_t(p)]) ++count, last = p;
-    if (count == 1 && time_ > 1) winner_ = last;
+    if (count == 1 && time_ > 1) winner_ = last, log("P" + std::to_string(last) + " WINS");
   }
 }
 
@@ -153,6 +165,7 @@ void Sim::stepShooter(Entity& s) {
   float bestD = range * range;
   for (auto& e : ents_) {
     if (!e.alive || e.owner == 0 || e.owner == s.owner || e.role == Role::Geyser) continue;
+    if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
     float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
     if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
     if (d2 <= bestD) bestD = d2, best = &e;
@@ -231,6 +244,17 @@ void Sim::damage(Entity& e, float amount) {
   if (!e.alive) return;
   e.hp -= int(std::ceil(amount));
   e.flash = 0.15f;
+  if (e.role == Role::Priest) {
+    // A priest is never killed by damage: at half health a force field forms.
+    e.hp = std::max(e.hp, 1);
+    if (e.hp * 2 <= e.maxHp && !e.immobile) {
+      e.immobile = true;
+      log("P" + std::to_string(e.owner) + " priest immobilised");
+      e.path.clear();
+      e.job = Entity::Job::Idle;
+    }
+    return;
+  }
   if (e.hp <= 0) kill(e);
 }
 
@@ -325,9 +349,9 @@ std::vector<std::pair<int, int>> Sim::findPath(int sx, int sy, int tx, int ty, i
   return path;
 }
 
-void Sim::stepGolem(Entity& g) {
+bool Sim::walkStep(Entity& g) {
   const float speed = g.type && g.type->def ? float(g.type->def->num("speed", 1.8)) : 1.8f;
-  auto walk = [&]() -> bool {  // returns true when the path is finished
+  {
     float budget = speed * kDt;
     while (budget > 0 && !g.path.empty()) {
       float tx = g.path.front().first + 0.5f, ty = g.path.front().second + 0.5f;
@@ -343,8 +367,14 @@ void Sim::stepGolem(Entity& g) {
         budget = 0;
       }
     }
+    // Anything carried moves along.
+    if (Entity* c = find(g.carryingPriest)) c->x = g.x, c->y = g.y - 0.3f;
     return g.path.empty();
-  };
+  }
+}
+
+void Sim::stepGolem(Entity& g) {
+  auto walk = [&]() { return walkStep(g); };
   auto planTo = [&](const Entity& b) {
     int cx, cy;
     approach(b, cx, cy);
@@ -377,6 +407,10 @@ void Sim::stepGolem(Entity& g) {
       if (planTo(*find(best))) g.job = Entity::Job::ToGeyser;
       break;
     }
+    case Entity::Job::ToBuild:
+    case Entity::Job::Building:
+      g.job = Entity::Job::Idle;
+      break;
     case Entity::Job::ToGeyser:
       if (walk()) {
         g.job = Entity::Job::Mining;
@@ -398,6 +432,61 @@ void Sim::stepGolem(Entity& g) {
       else g.job = Entity::Job::Idle;
       break;
     }
+    case Entity::Job::ToCapture: {
+      Entity* pr = find(g.target);
+      if (!pr || !pr->immobile || pr->carriedBy >= 0 || pr->chainedAt >= 0) {
+        g.job = Entity::Job::Idle;
+        g.target = -1;
+        break;
+      }
+      if (!walk()) break;
+      if (std::abs(g.x - pr->x) + std::abs(g.y - pr->y) > 2.5f) {  // he moved: re-plan
+        g.path = findPath(int(g.x), int(g.y), int(pr->x), int(pr->y), 0, 0);
+        if (g.path.empty()) g.job = Entity::Job::Idle;
+        break;
+      }
+      // Pick him up and head for our altar.
+      Entity* altar = nullptr;
+      for (auto& e : ents_)
+        if (e.alive && e.role == Role::Altar && e.owner == g.owner && e.built >= 1 && e.captive < 0) altar = &e;
+      if (!altar) {
+        g.job = Entity::Job::Idle;
+        break;
+      }
+      pr->carriedBy = g.id;
+      g.carryingPriest = pr->id;
+      log("P" + std::to_string(g.owner) + " golem captured the P" + std::to_string(pr->owner) + " priest");
+      g.target = altar->id;
+      int cx, cy;
+      approach(*altar, cx, cy);
+      g.path = findPath(int(g.x), int(g.y), cx, cy, 0, 0);
+      g.job = Entity::Job::ToAltar;
+      break;
+    }
+    case Entity::Job::ToAltar: {
+      if (!walk()) break;
+      Entity* pr = find(g.carryingPriest);
+      Entity* altar = find(g.target);
+      g.carryingPriest = -1;
+      g.job = Entity::Job::Idle;
+      if (!pr) break;
+      pr->carriedBy = -1;
+      if (altar && altar->captive < 0) {
+        // Chained in the sacrificial circle (centre of the altar).
+        altar->captive = pr->id;
+        altar->runes = 0;
+        pr->chainedAt = altar->id;
+        log("P" + std::to_string(pr->owner) + " priest chained at the P" + std::to_string(altar->owner) + " altar");
+        pr->x = altar->x - 3.0f;
+        pr->y = altar->y - 3.0f;
+        pr->hp = pr->maxHp;  // "draws new life force from the transport"
+        pr->immobile = false;
+      }
+      break;
+    }
+    case Entity::Job::Moving:
+      if (walk()) g.job = Entity::Job::Idle, g.timer = 3.0f;
+      break;
     case Entity::Job::ToTemple:
       if (walk()) {
         if (g.carrying) {
@@ -417,7 +506,7 @@ int Sim::energyAt(int player, const std::string& theme, int x, int y) const {
   int total = 0;
   for (auto& e : ents_) {
     if (!e.alive || e.owner != player || !e.type || !e.type->def) continue;
-    bool gen = e.role == Role::Generator || e.role == Role::Temple;
+    bool gen = (e.role == Role::Generator || e.role == Role::Temple) && e.built >= 1;
     if (!gen || e.type->def->str("theme") != theme) continue;
     // Generators: -minUsage energy within ~20 cells; temples power their fury too.
     int amount = e.role == Role::Temple ? 100 : -int(e.type->def->num("minUsage", -100));
@@ -453,6 +542,7 @@ bool Sim::startBuild(int workshopId, const std::string& unitType, std::string* w
     return false;
   };
   if (!w || w->role != Role::Workshop || !t || !t->def) return fail("not a workshop");
+  if (w->built < 1) return fail("workshop still under construction");
   if (!w->building.empty()) return fail("workshop busy");
   float cost = float(t->def->num("cost", 0));
   PlayerState& p = players_[size_t(w->owner)];
@@ -467,7 +557,7 @@ bool Sim::startBuild(int workshopId, const std::string& unitType, std::string* w
 }
 
 void Sim::stepWorkshop(Entity& w) {
-  if (w.building.empty()) return;
+  if (w.building.empty() || w.built < 1) return;
   const TypeInfo* t = gd_.registry.byName(w.building);
   float buildTime = t && t->def ? std::max(4.0f, float(t->def->num("cost", 400)) / 50.0f) : 8.0f;
   w.progress += kDt;
@@ -514,6 +604,182 @@ bool Sim::dropUnit(int player, int readyIndex, int ax, int ay) {
   spawn(t, player, float(ax), float(ay));
   p.ready.erase(p.ready.begin() + readyIndex);
   return true;
+}
+
+// ---- priest, construction, capture, sacrifice -----------------------------
+
+bool Sim::occupied(int x, int y, int ignoreId) const {
+  for (auto& e : ents_) {
+    if (!e.alive || e.id == ignoreId || !e.type || !e.type->def) continue;
+    if (e.role == Role::Golem || e.role == Role::Priest) continue;
+    int fx = footX(e.type), fy = footY(e.type);
+    if (x > int(e.x) - fx && x <= int(e.x) && y > int(e.y) - fy && y <= int(e.y)) return true;
+  }
+  return false;
+}
+
+bool Sim::orderMove(int id, int x, int y) {
+  Entity* w = find(id);
+  if (!w || (w->role != Role::Priest && w->role != Role::Golem)) return false;
+  if (w->immobile || w->carriedBy >= 0 || w->chainedAt >= 0) return false;
+  if (int(w->x) == x && int(w->y) == y) return true;  // already there
+  auto path = findPath(int(w->x), int(w->y), x, y, 0, 0);
+  if (path.empty()) return false;
+  w->path = path;
+  w->job = Entity::Job::Moving;
+  if (w->role == Role::Priest && w->buildId >= 0) w->buildId = -1;
+  return true;
+}
+
+std::vector<const TypeInfo*> Sim::constructable() const {
+  std::vector<const TypeInfo*> out;
+  for (const char* n : {"sunFactory", "windFactory", "rainFactory", "thunderFactory", "windVortex", "rainVortex",
+                        "thunderVortex", "altar"})
+    if (const TypeInfo* t = gd_.registry.byName(n); t && t->def) out.push_back(t);
+  return out;
+}
+
+bool Sim::canConstruct(int priestId, const TypeInfo* t, int ax, int ay, std::string* why) const {
+  auto fail = [&](const char* m) {
+    if (why) *why = m;
+    return false;
+  };
+  const Entity* p = nullptr;
+  for (auto& e : ents_)
+    if (e.id == priestId && e.alive) p = &e;
+  if (!p || p->role != Role::Priest || !t || !t->def) return fail("select your priest");
+  if (p->immobile) return fail("priest is immobilised");
+  int fx = footX(t), fy = footY(t);
+  for (int y = ay - fy + 1; y <= ay; ++y)
+    for (int x = ax - fx + 1; x <= ax; ++x) {
+      if (!world_.filled(x, y) || world_.ownerAt(x, y) != p->owner) return fail("must be on your own large island");
+      if (occupied(x, y)) return fail("something is in the way");
+    }
+  if (players_[size_t(p->owner)].power < float(t->def->num("cost", 0))) return fail("not enough storm power");
+  return true;
+}
+
+bool Sim::orderConstruct(int priestId, const std::string& typeName, int ax, int ay, std::string* why) {
+  const TypeInfo* t = gd_.registry.byName(typeName);
+  if (!canConstruct(priestId, t, ax, ay, why)) return false;
+  Entity* p = find(priestId);
+  int id = spawn(t, p->owner, float(ax), float(ay));
+  Entity* b = find(id);
+  p = find(priestId);  // spawn may reallocate
+  b->built = 0.0f;
+  log("P" + std::to_string(b->owner) + " priest started building " + t->name);
+  b->hp = std::max(1, b->maxHp / 10);
+  players_[size_t(p->owner)].power -= float(t->def->num("cost", 0));
+  int cx, cy;
+  approach(*b, cx, cy);
+  p->path = findPath(int(p->x), int(p->y), cx, cy, 0, 0);
+  p->buildId = id;
+  p->job = Entity::Job::ToBuild;
+  return true;
+}
+
+bool Sim::orderCapture(int golemId, int priestId, std::string* why) {
+  auto fail = [&](const char* m) {
+    if (why) *why = m;
+    return false;
+  };
+  Entity* g = find(golemId);
+  Entity* pr = find(priestId);
+  if (!g || g->role != Role::Golem) return fail("select a golem");
+  if (!pr || pr->role != Role::Priest || pr->owner == g->owner) return fail("target an enemy priest");
+  if (!pr->immobile) return fail("damage him to half health first");
+  bool haveAltar = false;
+  for (auto& e : ents_)
+    if (e.alive && e.role == Role::Altar && e.owner == g->owner && e.built >= 1 && e.captive < 0) haveAltar = true;
+  if (!haveAltar) return fail("you need a finished altar");
+  g->path = findPath(int(g->x), int(g->y), int(pr->x), int(pr->y), 0, 0);
+  if (g->path.empty()) return fail("golem cant reach him");
+  g->carrying = false;
+  g->target = pr->id;
+  g->job = Entity::Job::ToCapture;
+  return true;
+}
+
+void Sim::stepPriest(Entity& p) {
+  if (p.chainedAt >= 0 || p.carriedBy >= 0) return;  // captive
+  // Constant regeneration; the force field drops above half health.
+  if (p.hp < p.maxHp && int(time_ / kDt) % 10 == 0) p.hp = std::min(p.maxHp, p.hp + std::max(1, p.maxHp / 50));
+  if (p.immobile) {
+    if (p.hp * 2 > p.maxHp + 10) p.immobile = false;
+    return;
+  }
+  switch (p.job) {
+    case Entity::Job::Moving:
+      if (walkStep(p)) p.job = Entity::Job::Idle;
+      break;
+    case Entity::Job::ToBuild:
+      if (!find(p.buildId)) {
+        p.job = Entity::Job::Idle;
+        break;
+      }
+      if (walkStep(p)) p.job = Entity::Job::Building;
+      break;
+    case Entity::Job::Building: {
+      Entity* b = find(p.buildId);
+      if (!b) {
+        p.job = Entity::Job::Idle;
+        break;
+      }
+      float total = std::max(8.0f, float(b->type->def->num("cost", 600)) / 60.0f);
+      b->built = std::min(1.0f, b->built + kDt / total);
+      b->hp = std::max(b->hp, int(b->maxHp * b->built));
+      if (b->built >= 1) {
+        p.buildId = -1;
+        p.job = Entity::Job::Idle;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void Sim::stepAltar(Entity& a) {
+  if (a.captive < 0) return;
+  Entity* victim = find(a.captive);
+  if (!victim) {
+    a.captive = -1;
+    a.runes = 0;
+    return;
+  }
+  // Our own priest must be standing at the altar, and not immobilised.
+  Entity* mine = nullptr;
+  for (auto& e : ents_)
+    if (e.alive && e.role == Role::Priest && e.owner == a.owner && e.chainedAt < 0 && e.carriedBy < 0) mine = &e;
+  bool present = mine && !mine->immobile && std::abs(mine->x - (a.x - 3)) < 6 && std::abs(mine->y - (a.y - 3)) < 6;
+  if (!present) {
+    if (mine && mine->immobile && a.runes > 0) {  // spell broken: the captive escapes
+      victim->chainedAt = -1;
+      a.captive = -1;
+      a.runes = 0;
+    }
+    return;
+  }
+  a.runes += kDt / kRuneTime;
+  if (a.runes >= 5.0f) {
+    // The enemy priest plunges into the abyss; his player is out.
+    log("P" + std::to_string(victim->owner) + " priest SACRIFICED by P" + std::to_string(a.owner));
+    out_[size_t(victim->owner)] = true;
+    victim->alive = false;
+    Effect fx;
+    fx.type = gd_.registry.byName("bombExplodeLarge");
+    fx.x = victim->x;
+    fx.y = victim->y;
+    fx.life = 1.5f;
+    effects_.push_back(fx);
+    a.captive = -1;
+    a.runes = 0;
+    // When Knowledge is granted the altar is consumed.
+    a.alive = false;
+    // Everything the sacrificed player owned stops working.
+    for (auto& e : ents_)
+      if (e.alive && e.owner == victim->owner) e.owner = 0;
+  }
 }
 
 }  // namespace ns

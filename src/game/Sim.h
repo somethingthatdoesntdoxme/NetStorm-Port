@@ -23,7 +23,7 @@
 
 namespace ns {
 
-enum class Role : uint8_t { Static, Golem, Priest, Geyser, Temple, Workshop, Generator, Shooter };
+enum class Role : uint8_t { Static, Golem, Priest, Geyser, Temple, Workshop, Generator, Shooter, Altar };
 
 struct Entity {
   int id = 0;
@@ -38,7 +38,7 @@ struct Entity {
   // Geyser
   int crystals = 0;  // Storm Power left in it
   // Golem
-  enum class Job : uint8_t { Idle, ToGeyser, Mining, ToTemple } job = Job::Idle;
+  enum class Job : uint8_t { Idle, ToGeyser, Mining, ToTemple, ToCapture, ToAltar, Moving, ToBuild, Building } job = Job::Idle;
   int target = -1;    // geyser id
   int home = -1;      // temple id
   bool carrying = false;
@@ -47,6 +47,18 @@ struct Entity {
   // Workshop
   std::string building;  // type being built ("" = idle)
   float progress = 0;    // seconds done
+  // Buildings under construction (0..1); not functional until 1.
+  float built = 1.0f;
+  // Priest
+  bool immobile = false;   // at <= 50% hp: force field, can't act, can be captured
+  int carriedBy = -1;      // golem carrying this priest
+  int chainedAt = -1;      // altar this priest is chained to
+  int buildId = -1;        // building this priest is constructing
+  // Golem carrying a captured priest
+  int carryingPriest = -1;
+  // Altar
+  int captive = -1;        // chained enemy priest
+  float runes = 0;         // 0..5 runes warded
   // Shooter
   float cooldown = 0;
   int lastTarget = -1;
@@ -104,6 +116,20 @@ class Sim {
   void damage(Entity& e, float amount);
   int winner() const { return winner_; }  // >0 once only one player has buildings left
 
+  // ---- priest + sacrifice ------------------------------------------------
+  // Order a walker (priest or golem) to walk to a cell.
+  bool orderMove(int walkerId, int x, int y);
+  // Priest constructs `typeName` with anchor (x, y). Cost is paid up front.
+  bool canConstruct(int priestId, const TypeInfo* t, int x, int y, std::string* why = nullptr) const;
+  bool orderConstruct(int priestId, const std::string& typeName, int x, int y, std::string* why = nullptr);
+  // Golem picks up an immobilised enemy priest and takes him to our altar.
+  bool orderCapture(int golemId, int priestId, std::string* why = nullptr);
+  // Types a priest can construct.
+  std::vector<const TypeInfo*> constructable() const;
+  const TypeInfo* registryType(const std::string& name) const { return gd_.registry.byName(name); }
+  bool eliminated(int player) const { return player >= 0 && player <= 8 && out_[size_t(player)]; }
+  static constexpr float kRuneTime = 6.0f;  // seconds per rune, 5 runes
+
   // Energy of a fury available to `player` at a cell (sum of generators in range).
   int energyAt(int player, const std::string& theme, int x, int y) const;
 
@@ -112,6 +138,9 @@ class Sim {
   Entity* find(int id);
   PlayerState& player(int p) { return players_[size_t(std::clamp(p, 0, 8))]; }
   double time() const { return time_; }
+  // Game event log ("[12s] P1 priest immobilised").
+  const std::vector<std::string>& events() const { return events_; }
+  void log(const std::string& m);
   // Debug: walking path length between two cells (-1 if unreachable).
   int pathLength(int sx, int sy, int tx, int ty) const { auto p = findPath(sx, sy, tx, ty, 0, 0); return p.empty() ? -1 : int(p.size()); }
   bool walkableAt(int x, int y) const { return walkable(x, y); }
@@ -120,6 +149,10 @@ class Sim {
   void stepGolem(Entity& g);
   void stepWorkshop(Entity& w);
   void stepShooter(Entity& s);
+  void stepPriest(Entity& p);
+  void stepAltar(Entity& a);
+  bool walkStep(Entity& w);  // advance along path; true when finished
+  bool occupied(int x, int y, int ignoreId = -1) const;
   void stepProjectiles();
   void kill(Entity& e);
   void collapseLand(const Entity& e);
@@ -135,6 +168,8 @@ class Sim {
   std::vector<Projectile> shots_;
   std::vector<Effect> effects_;
   int winner_ = 0;
+  std::vector<std::string> events_;
+  std::array<bool, 9> out_{};  // players whose priest was sacrificed
   int nextId_ = 1;
   double time_ = 0;
 };

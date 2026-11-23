@@ -40,12 +40,19 @@ cmake --build build --config Release
 ./build/nstool "/path/to/Netstorm" forts                 # decode every mission
 ```
 
-World controls: left click drop bridge piece, right click / R rotate, B let the AI
+World controls: click your priest to walk/build (temples, workshops, altars), click a golem then a
+downed enemy priest to capture him, click a workshop to produce units, left click drop bridge piece, right click / R rotate, B let the AI
 place one, drag or WASD pan, wheel zoom, M / [ ] cycle missions, N test layout, G grid.
 
 Sprite viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,
 drag to pan, F sharp/smooth filtering, T cycle team colours, Space animate,
 F11 fullscreen.
+
+## Tests
+
+```sh
+cmake -S . -B build -DNETSTORM_DATA=/path/to/Netstorm && cmake --build build && (cd build && ctest)
+```
 
 ## Layout
 

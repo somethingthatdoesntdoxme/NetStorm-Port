@@ -15,6 +15,8 @@ class SkirmishAi {
  private:
   void produce(Sim& sim);
   void dropReady(Sim& sim, Island& world);
+  void priestWork(Sim& sim, Island& world);
+  bool findSite(Sim& sim, Island& world, int priestId, const TypeInfo* t, int& x, int& y);
   int player_;
   BridgeQueue queue_;
   uint32_t seed_;

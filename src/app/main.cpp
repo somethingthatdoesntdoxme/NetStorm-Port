@@ -110,6 +110,7 @@ int main(int argc, char** argv) {
         }
       std::printf("\n  shooters=%d powered=%d", shooters, firing);
       std::printf("  winner=%d  shots in flight=%zu\n", world.sim()->winner(), world.sim()->projectiles().size());
+      for (auto& ev : world.sim()->events()) std::printf("  %s\n", ev.c_str());
       std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d, units ready %zu\n",
                   simulate, world.player(), before, p.power, p.delivered, p.ready.size());
     }

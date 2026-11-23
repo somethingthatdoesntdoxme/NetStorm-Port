@@ -69,6 +69,9 @@ class WorldView {
   double simAcc_ = 0;
   int selectedWorkshop_ = -1;  // production menu open for this workshop
   int dropIndex_ = -1;         // placing this ready unit
+  int selected_ = -1;          // selected own priest or golem
+  std::string constructType_;  // priest building being placed
+  void anchorForCursor(const TypeInfo* t, int sx, int sy, int& ax, int& ay) const;
   std::string message_;
   double messageTime_ = 0;
   struct Button {

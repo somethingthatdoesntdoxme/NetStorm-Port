@@ -106,12 +106,12 @@ void WorldView::startSim(float startPower) {
 void WorldView::buildTestScene(uint32_t seed) {
   // One world grid with four blob islands stamped in (same layout as before).
   islands_.clear();
-  Island world(80, 60);
+  Island world(100, 76);
   const Element els[4] = {Element::Sun, Element::Wind, Element::Rain, Element::Thunder};
-  const int pos[4][2] = {{4, 6}, {34, 2}, {8, 32}, {38, 30}};
+  const int pos[4][2] = {{4, 6}, {44, 2}, {8, 40}, {48, 38}};
   const int owners[4] = {1, 0, 0, 2};
   for (int i = 0; i < 4; ++i) {
-    Island blob = makeBlobIsland(22 + int(seed % 3) * 2, 18, els[i], seed * 31 + i * 7);
+    Island blob = makeBlobIsland(30 + int(seed % 3) * 2, 24, els[i], seed * 31 + i * 7);
     for (int y = 0; y < blob.height(); ++y)
       for (int x = 0; x < blob.width(); ++x)
         if (blob.filled(x, y)) {
@@ -152,6 +152,7 @@ void WorldView::buildTestScene(uint32_t seed) {
   add("sunCannon", 3, 5, 11);
   add("sunBattery", 3, 12, 4);
   add("rainVortex", 3, 14, 9);
+  add("priest", 3, 10, 14);
   startSim(3000);
   frame(0, 0, float(world.width() * kCellW), float(world.height() * kCellH + 40));
 }
@@ -161,8 +162,12 @@ void WorldView::handle(const SDL_Event& e) {
     case SDL_KEYDOWN:
       switch (e.key.keysym.sym) {
         case SDLK_ESCAPE:
-          if (selectedWorkshop_ >= 0 || dropIndex_ >= 0) selectedWorkshop_ = dropIndex_ = -1;
-          else quit_ = true;
+          if (selectedWorkshop_ >= 0 || dropIndex_ >= 0 || selected_ >= 0 || !constructType_.empty()) {
+            selectedWorkshop_ = dropIndex_ = selected_ = -1;
+            constructType_.clear();
+          } else {
+            quit_ = true;
+          }
           break;
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: queue_.rotate(); break;
@@ -216,8 +221,31 @@ void WorldView::handle(const SDL_Event& e) {
     case SDL_MOUSEBUTTONUP:
       if (leftDown_ && !moved_ && !islands_.empty()) {
         int sx = e.button.x, sy = e.button.y;
+        const Entity* clicked = entityAtScreen(sx, sy);
         if (handleUiClick(sx, sy)) {
           // HUD button
+        } else if (!constructType_.empty() && sim_) {
+          int ax, ay;
+          anchorForCursor(gd_.registry.byName(constructType_), sx, sy, ax, ay);
+          std::string why;
+          if (sim_->orderConstruct(selected_, constructType_, ax, ay, &why)) constructType_.clear();
+          else {
+            for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
+            message_ = why, messageTime_ = time_;
+          }
+        } else if (clicked && clicked->owner == player_ &&
+                   (clicked->role == Role::Priest || clicked->role == Role::Golem)) {
+          selected_ = clicked->id;
+          selectedWorkshop_ = -1;
+        } else if (clicked && clicked->role == Role::Priest && clicked->owner != player_ && sim_ &&
+                   sim_->find(selected_) && sim_->find(selected_)->role == Role::Golem) {
+          std::string why;
+          if (!sim_->orderCapture(selected_, clicked->id, &why)) {
+            for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
+            message_ = why, messageTime_ = time_;
+          } else {
+            message_ = "GOLEM SENT TO CAPTURE THE PRIEST", messageTime_ = time_;
+          }
         } else if (dropIndex_ >= 0 && sim_) {
           const auto& ready = sim_->player(player_).ready;
           if (dropIndex_ < int(ready.size())) {
@@ -231,9 +259,18 @@ void WorldView::handle(const SDL_Event& e) {
           } else {
             dropIndex_ = -1;
           }
-        } else if (const Entity* ent = entityAtScreen(sx, sy);
-                   ent && ent->role == Role::Workshop && ent->owner == player_) {
-          selectedWorkshop_ = ent->id;
+        } else if (clicked && clicked->role == Role::Workshop && clicked->owner == player_) {
+          selectedWorkshop_ = clicked->id;
+          selected_ = -1;
+        } else if (sim_ && sim_->find(selected_) && !clicked) {
+          float wx, wy;
+          cam_.screenToWorld(sx, sy, wx, wy);
+          int cx = int(std::floor(wx / kCellW)), cy = int(std::floor(wy / kCellH));
+          if (sim_->walkableAt(cx, cy)) {
+            if (!sim_->orderMove(selected_, cx, cy)) message_ = "CANT GET THERE", messageTime_ = time_;
+          } else {
+            selected_ = -1;  // clicked sky: deselect
+          }
         } else if (hoverX_ >= 0 && canPlaceBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_)) {
           placeBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_);
           queue_.next();
@@ -505,12 +542,26 @@ bool WorldView::handleUiClick(int sx, int sy) {
     } else if (b.action.rfind("drop:", 0) == 0) {
       dropIndex_ = std::atoi(b.action.c_str() + 5);
       selectedWorkshop_ = -1;
+    } else if (b.action.rfind("construct:", 0) == 0) {
+      constructType_ = b.action.substr(10);
+      dropIndex_ = -1;
     } else if (b.action == "close") {
       selectedWorkshop_ = -1;
+      selected_ = -1;
+      constructType_.clear();
     }
     return true;
   }
   return false;
+}
+
+void WorldView::anchorForCursor(const TypeInfo* t, int sx, int sy, int& ax, int& ay) const {
+  float wx, wy;
+  cam_.screenToWorld(sx, sy, wx, wy);
+  int fx = t && t->def ? std::max(1, int(t->def->num("foot_x", 1))) : 1;
+  int fy = t && t->def ? std::max(1, int(t->def->num("foot_y", 1))) : 1;
+  ax = int(std::floor(wx / kCellW)) + fx / 2;
+  ay = int(std::floor(wy / kCellH)) + fy / 2;
 }
 
 void WorldView::drawHud() {
@@ -578,6 +629,48 @@ void WorldView::drawHud() {
       buttons_.push_back({r, "build:" + t->name});
       y += 30;
     }
+  }
+
+  // Priest panel: construction options.
+  if (Entity* pr = sim_->find(selected_); pr && pr->role == Role::Priest && selectedWorkshop_ < 0) {
+    auto list = sim_->constructable();
+    float pw = 380, px = float(cam_.screenW) - pw - 12, py = 12;
+    panel({px, py, pw, 64 + 30.0f * float(list.size())});
+    drawText(ren, px + 10, py + 10, 2, pr->immobile ? "HIGH PRIEST - IMMOBILISED" : "HIGH PRIEST - BUILD", gold);
+    SDL_FRect close{px + pw - 30, py + 6, 22, 22};
+    drawText(ren, close.x + 5, close.y + 4, 2, "X", red);
+    buttons_.push_back({close, "close"});
+    drawText(ren, px + 10, py + 34, 2, "CLICK LAND TO WALK", grey);
+    float y = py + 60;
+    for (auto* t : list) {
+      SDL_FRect r{px + 8, y, pw - 16, 26};
+      int cost = int(t->def->num("cost", 0));
+      SDL_SetRenderDrawColor(ren, constructType_ == t->name ? 70 : 40, 40, 55, 255);
+      SDL_RenderFillRectF(ren, &r);
+      drawText(ren, r.x + 6, y + 6, 2, t->name, me.power >= cost ? white : grey);
+      std::string c = std::to_string(cost);
+      drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
+      buttons_.push_back({r, "construct:" + t->name});
+      y += 30;
+    }
+  } else if (Entity* g = sim_->find(selected_); g && g->role == Role::Golem) {
+    float pw = 380, px = float(cam_.screenW) - pw - 12;
+    panel({px, 12, pw, 60});
+    drawText(ren, px + 10, 22, 2, "GOLEM", gold);
+    drawText(ren, px + 10, 44, 2, "CLICK A DOWNED ENEMY PRIEST", grey);
+  }
+  // Construction ghost.
+  if (!constructType_.empty()) {
+    const TypeInfo* t = gd_.registry.byName(constructType_);
+    int mx, my, ax, ay;
+    SDL_GetMouseState(&mx, &my);
+    anchorForCursor(t, mx, my, ax, ay);
+    int fx = std::max(1, int(t->def->num("foot_x", 1))), fy = std::max(1, int(t->def->num("foot_y", 1)));
+    bool ok = sim_->canConstruct(selected_, t, ax, ay);
+    SDL_FRect fp = cam_.toScreen(float((ax - fx + 1) * kCellW), float((ay - fy + 1) * kCellH), float(fx * kCellW),
+                                 float(fy * kCellH));
+    SDL_SetRenderDrawColor(ren, ok ? 80 : 255, ok ? 255 : 70, 80, 90);
+    SDL_RenderFillRectF(ren, &fp);
   }
 
   // Drop ghost for the unit being placed.
@@ -654,6 +747,7 @@ void WorldView::drawCombat() {
   }
   if (sim_->winner()) {
     std::string msg = sim_->winner() == player_ ? "VICTORY" : "PLAYER " + std::to_string(sim_->winner()) + " WINS";
+    if (sim_->eliminated(player_)) msg = "YOUR PRIEST WAS SACRIFICED";
     float w = float(msg.size()) * 30;
     drawText(ren, (cam_.screenW - w) / 2, cam_.screenH * 0.4f, 5, msg, SDL_Color{255, 220, 110, 255});
   }
@@ -732,13 +826,41 @@ void WorldView::drawObjects() {
     auto drawFrame = [&](int line) {
       const SpriteTex& st = cache_.get(o.type->set, o.type->frame(line));
       if (o.flash > 0 && st.tex) SDL_SetTextureColorMod(st.tex, 255, 120, 110);
+      if (o.built < 1 && st.tex) SDL_SetTextureAlphaMod(st.tex, Uint8(60 + 150 * o.built));
       blit(st, wx, wy);
-      if (o.flash > 0 && st.tex) SDL_SetTextureColorMod(st.tex, 255, 255, 255);
+      if (st.tex) SDL_SetTextureColorMod(st.tex, 255, 255, 255), SDL_SetTextureAlphaMod(st.tex, 255);
     };
     if (base >= 0) drawFrame(base);
     if (anim != base) drawFrame(anim);
+    SDL_Renderer* rr = r_.sdl();
+    if (o.id == selected_) {  // selection box
+      SDL_FRect d = cam_.toScreen(wx - 9, wy - 26, 18, 28);
+      SDL_SetRenderDrawColor(rr, 255, 230, 120, 255);
+      SDL_RenderDrawRectF(rr, &d);
+    }
+    if (o.role == Role::Priest && o.immobile) {  // force field
+      float pulse = 0.5f + 0.5f * float(std::sin(time_ * 6));
+      SDL_FRect d = cam_.toScreen(wx - 10, wy - 24, 20, 26);
+      SDL_SetRenderDrawColor(rr, 120, 200, 255, Uint8(90 + 120 * pulse));
+      SDL_RenderDrawRectF(rr, &d);
+    }
+    if (o.built < 1) {  // under construction
+      SDL_FRect bg = cam_.toScreen(wx - 40, wy + 4, 40, 3), fg = cam_.toScreen(wx - 40, wy + 4, 40 * o.built, 3);
+      SDL_SetRenderDrawColor(rr, 20, 20, 30, 220);
+      SDL_RenderFillRectF(rr, &bg);
+      SDL_SetRenderDrawColor(rr, 120, 200, 255, 255);
+      SDL_RenderFillRectF(rr, &fg);
+    }
+    if (o.role == Role::Altar && o.captive >= 0) {  // rune progress
+      for (int k = 0; k < 5; ++k) {
+        SDL_FRect d = cam_.toScreen(wx - 70 + k * 10.0f, wy + 8, 8, 4);
+        bool lit = o.runes >= k + 1;
+        SDL_SetRenderDrawColor(rr, lit ? 255 : 60, lit ? 200 : 60, lit ? 80 : 70, 255);
+        SDL_RenderFillRectF(rr, &d);
+      }
+    }
     // Health bar when damaged.
-    if (o.hp < o.maxHp && o.maxHp > 0) {
+    if (o.hp < o.maxHp && o.maxHp > 0 && o.built >= 1) {
       float w = 20, f = std::max(0.0f, float(o.hp) / float(o.maxHp));
       SDL_FRect bg = cam_.toScreen(wx - 16, wy + 2, w, 2), fg = cam_.toScreen(wx - 16, wy + 2, w * f, 2);
       SDL_SetRenderDrawColor(r_.sdl(), 30, 0, 0, 220);

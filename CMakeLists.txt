@@ -57,3 +57,12 @@ endif()
 # ---- command line data tool (no SDL) ----
 add_executable(nstool src/app/nstool.cpp)
 target_link_libraries(nstool PRIVATE nscore)
+
+# ---- tests (need a NetStorm install: -DNETSTORM_DATA=/path/to/Netstorm) ----
+enable_testing()
+add_executable(test_sacrifice tests/test_sacrifice.cpp src/game/Sim.cpp)
+target_link_libraries(test_sacrifice PRIVATE nscore)
+target_include_directories(test_sacrifice PRIVATE src)
+if(NETSTORM_DATA)
+  add_test(NAME sacrifice COMMAND test_sacrifice ${NETSTORM_DATA})
+endif()

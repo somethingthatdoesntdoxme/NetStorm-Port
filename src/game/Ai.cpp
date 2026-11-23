@@ -8,7 +8,7 @@ namespace ns {
 
 void SkirmishAi::step(Sim& sim, Island& world) {
   ++tick_;
-  if (tick_ % 30 == 7) {  // a bridge piece every 1.5 s
+  if (tick_ % bridgeEvery_ == 7 % bridgeEvery_) {  // a bridge piece every few seconds
     int x, y;
     if (bestBridgeMove(world, queue_, player_, x, y)) placeBridge(world, queue_.current(), x, y, player_);
     queue_.next();
@@ -55,7 +55,8 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
   }
   // 2. Capture: any immobilised enemy priest -> send an idle golem.
   for (auto& pr : sim.entities()) {
-    if (!pr.alive || pr.role != Role::Priest || pr.owner == player_ || pr.owner == 0 || !pr.immobile) continue;
+    if (!pr.alive || pr.role != Role::Priest || sim.allied(pr.owner, player_) || pr.owner == 0 || !pr.immobile)
+      continue;
     if (pr.carriedBy >= 0 || pr.chainedAt >= 0) continue;
     bool already = false;
     for (auto& g : sim.entities())
@@ -84,7 +85,8 @@ static bool frontPoint(Sim& sim, int player, float& fx, float& fy) {
   for (auto& m : sim.entities()) {
     if (!m.alive || m.owner != player || !m.type || !m.type->def) continue;
     for (auto& e : sim.entities()) {
-      if (!e.alive || e.owner == 0 || e.owner == player || e.role == Role::Geyser || e.role == Role::Golem) continue;
+      if (!e.alive || e.owner == 0 || sim.allied(e.owner, player) || e.role == Role::Geyser || e.role == Role::Golem)
+        continue;
       float d = (e.x - m.x) * (e.x - m.x) + (e.y - m.y) * (e.y - m.y);
       if (d < best) best = d, fx = m.x, fy = m.y, any = true;
     }
@@ -154,7 +156,7 @@ void SkirmishAi::dropReady(Sim& sim, Island& world) {
   float best = std::numeric_limits<float>::max();
   {  // shooters and generators both go towards the enemy
     for (auto& e : sim.entities()) {
-      if (!e.alive || e.owner == 0 || e.owner == player_ || e.role == Role::Geyser) continue;
+      if (!e.alive || e.owner == 0 || sim.allied(e.owner, player_) || e.role == Role::Geyser) continue;
       float d = std::abs(e.x - myx) + std::abs(e.y - myy);
       if (d < best) best = d, axp = e.x, ayp = e.y;
     }

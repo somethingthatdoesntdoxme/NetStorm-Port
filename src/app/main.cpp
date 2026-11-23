@@ -1,44 +1,73 @@
 // NetStorm Port -- clean-room reimplementation of NetStorm: Islands at War.
 // Reads all game data from the user's own installation.
 //
-//   netstorm --data <install-dir> [--set N] [--fullscreen] [--screenshot out.bmp]
+//   netstorm --data <install-dir>                 title screen / campaign
+//   Test hooks: --mission <fort> | --campaign <id> | --sprites | --set N
+//               --autobuild N --simulate SECONDS --demo --ai-both
+//               --screenshot out.bmp [--menu title|chapters|missions|brief]
 #include <SDL.h>
 
 #include <cstdio>
 #include <cstring>
 #include <string>
 
+#include "app/Frontend.h"
 #include "app/Viewer.h"
 #include "app/WorldView.h"
 #include "data/GameData.h"
 #include "render/Renderer.h"
 
+namespace {
+void printStats(ns::WorldView& world, float before, double simulate, const ns::GameData& gd) {
+  auto* sim = world.sim();
+  if (!sim) return;
+  auto& p = sim->player(world.player());
+  if (!p.ready.empty()) {
+    bool dropped = false;
+    for (int y = 2; y < 200 && !dropped; ++y)
+      for (int x = 2; x < 200 && !dropped; ++x)
+        if (sim->canDropUnit(gd.registry.byName(p.ready[0]), x, y, world.player()))
+          dropped = sim->dropUnit(world.player(), 0, x, y);
+    std::printf("dropped ready unit: %s\n", dropped ? "yes" : "no");
+  }
+  int counts[9] = {0};
+  for (auto& e : sim->entities())
+    if (e.alive && e.owner > 0 && e.owner <= 8) counts[e.owner]++;
+  std::printf("alive entities per player:");
+  for (int i = 1; i <= 8; ++i)
+    if (counts[i]) std::printf(" p%d=%d", i, counts[i]);
+  for (int i = 1; i <= 8; ++i)
+    if (counts[i])
+      std::printf("\n  p%d power=%.0f delivered=%d ready=%zu", i, sim->player(i).power, sim->player(i).delivered,
+                  sim->player(i).ready.size());
+  std::printf("\n  winner=%d outcome(you)=%d\n", sim->winner(), world.outcome());
+  for (auto& ev : sim->events()) std::printf("  %s\n", ev.c_str());
+  std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d\n", simulate, world.player(),
+              before, p.power, p.delivered);
+}
+}  // namespace
+
 int main(int argc, char** argv) {
-  std::string dataDir = ".";
-  std::string shot;
-  int startSet = 0;
-  bool worldMode = true;
-  std::string mission;
-  int autobuild = 0;
+  std::string dataDir = ".", shot, mission, campaign, menuShot;
+  int startSet = -1, autobuild = 0;
   double simulate = 0;
-  bool demo = false;
-  bool aiBoth = false;
+  bool demo = false, aiBoth = false, sprites = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
     if (a == "--data") dataDir = next();
-    else if (a == "--set") {
-      startSet = std::atoi(next().c_str());
-      worldMode = false;
-    } else if (a == "--sprites") worldMode = false;
+    else if (a == "--set") startSet = std::atoi(next().c_str()), sprites = true;
+    else if (a == "--sprites") sprites = true;
     else if (a == "--fullscreen") wc.fullscreenDesktop = true;
+    else if (a == "--screenshot") shot = next();
+    else if (a == "--menu") menuShot = next();
     else if (a == "--mission") mission = next();
+    else if (a == "--campaign") campaign = next();
     else if (a == "--autobuild") autobuild = std::atoi(next().c_str());
     else if (a == "--simulate") simulate = std::atof(next().c_str());
     else if (a == "--demo") demo = true;
     else if (a == "--ai-both") aiBoth = true;
-    else if (a == "--screenshot") shot = next();
     else if (a == "--size") {
       std::string s = next();
       std::sscanf(s.c_str(), "%dx%d", &wc.width, &wc.height);
@@ -59,92 +88,160 @@ int main(int argc, char** argv) {
   }
   std::printf("Loaded %zu scripts, %zu types, %d sprite sets / %d frames\n", gd.archive.entries().size(),
               gd.types.size(), gd.shapes.setCount(), gd.shapes.totalFrames());
+  if (!shot.empty()) wc.hidden = true, wc.vsync = false;
 
-  if (!shot.empty()) {
-    wc.hidden = true;
-    wc.vsync = false;
-  }
   ns::Renderer r;
   if (!r.init(wc, &err)) {
     std::fprintf(stderr, "video init failed: %s\n", err.c_str());
     return 1;
   }
-  ns::Viewer v(r, gd);
-  v.setSet(startSet);
+  SDL_SetWindowTitle(r.window(), "NetStorm");
+  ns::Viewer viewer(r, gd);
+  if (startSet >= 0) viewer.setSet(startSet);
   ns::WorldView world(r, gd);
-  if (!mission.empty() && !world.loadMissionByName(mission))
-    std::fprintf(stderr, "mission '%s' not found\n", mission.c_str());
-  if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
+  ns::Frontend front(r, gd);
+
+  enum class State { Menu, Game, Sprites } state = sprites ? State::Sprites : State::Menu;
+  std::string currentMission;  // campaign mission being played ("" = skirmish/test)
+  auto startCampaign = [&](const std::string& id) {
+    const ns::MissionInfo* m = front.mission(id);
+    if (!m || !world.startMission(*m)) {
+      std::fprintf(stderr, "couldn't start mission %s\n", id.c_str());
+      return false;
+    }
+    currentMission = id;
+    state = State::Game;
+    return true;
+  };
+
+  // Test hooks / direct starts.
+  if (!mission.empty()) {
+    if (!world.loadMissionByName(mission)) std::fprintf(stderr, "mission '%s' not found\n", mission.c_str());
+    state = State::Game;
+  }
+  if (!campaign.empty()) startCampaign(campaign);
+  if (!menuShot.empty()) {
+    if (menuShot == "chapters") front.handle(SDL_Event{});  // no-op
+    SDL_Event e{};
+    e.type = SDL_MOUSEBUTTONUP;
+    e.button.button = SDL_BUTTON_LEFT;
+    // Navigate by clicking through: title -> campaign -> first chapter -> first mission.
+    auto clickFirst = [&]() {
+      int sw, sh;
+      r.outputSize(sw, sh);
+      (void)sh;
+      e.button.x = sw / 2;
+      e.button.y = 0;
+      for (int y = 0; y < 2000; y += 4) {  // find the first button by scanning down the centre
+        e.button.y = y;
+        SDL_Event m{};
+        m.type = SDL_MOUSEMOTION;
+        m.motion.x = e.button.x;
+        m.motion.y = y;
+        auto before = front.screen();
+        auto act = front.handle(e);
+        if (front.screen() != before || act.kind != ns::FrontendAction::None) return act;
+      }
+      return ns::FrontendAction{};
+    };
+    if (menuShot != "title") clickFirst();                                         // -> chapters
+    if (menuShot == "missions" || menuShot == "brief") clickFirst();               // -> missions
+    if (menuShot == "brief") clickFirst();                                         // -> briefing
+    state = State::Menu;
+  }
   if (aiBoth) world.setAiForMe(true);
+  if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
   if (demo) std::printf("demo: started building %s\n", world.demoProduction().c_str());
   if (simulate > 0) {
     float before = world.sim() ? world.sim()->player(world.player()).power : 0;
-    for (double t = 0; t < simulate; t += 1.0 / 30) world.update(1.0 / 30);
-    if (world.sim()) {
-      auto& p = world.sim()->player(world.player());
-      // Drop the first ready unit at the first legal spot (tests the drop path).
-      if (!p.ready.empty()) {
-        bool dropped = false;
-        for (int y = 2; y < 200 && !dropped; ++y)
-          for (int x = 2; x < 200 && !dropped; ++x)
-            if (world.sim()->canDropUnit(gd.registry.byName(p.ready[0]), x, y, world.player()))
-              dropped = world.sim()->dropUnit(world.player(), 0, x, y);
-        std::printf("dropped ready unit: %s\n", dropped ? "yes" : "no");
+    for (double t = 0; t < simulate; t += 1.0 / 30) {
+      world.update(1.0 / 30);
+      if (world.outcome() != 0) {
+        std::printf("game over after %.0fs: %s\n", t, world.outcome() > 0 ? "WON" : "LOST");
+        break;
       }
-      int counts[9] = {0};
-      for (auto& e : world.sim()->entities())
-        if (e.alive && e.owner > 0 && e.owner <= 8) counts[e.owner]++;
-      std::printf("alive entities per player:");
-      for (int i = 1; i <= 8; ++i)
-        if (counts[i]) std::printf(" p%d=%d", i, counts[i]);
-      for (int i = 1; i <= 8; ++i)
-        if (counts[i])
-          std::printf("\n  p%d power=%.0f delivered=%d ready=%zu", i, world.sim()->player(i).power,
-                      world.sim()->player(i).delivered, world.sim()->player(i).ready.size());
-      int shooters = 0, firing = 0;
-      for (auto& e : world.sim()->entities())
-        if (e.alive && e.role == ns::Role::Shooter) {
-          ++shooters;
-          int need = int(e.type->def->num("minUsage", 0));
-          if (world.sim()->energyAt(e.owner, e.type->def->str("theme"), int(e.x), int(e.y)) >= need) ++firing;
-        }
-      std::printf("\n  shooters=%d powered=%d", shooters, firing);
-      std::printf("  winner=%d  shots in flight=%zu\n", world.sim()->winner(), world.sim()->projectiles().size());
-      for (auto& ev : world.sim()->events()) std::printf("  %s\n", ev.c_str());
-      std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d, units ready %zu\n",
-                  simulate, world.player(), before, p.power, p.delivered, p.ready.size());
     }
+    printStats(world, before, simulate, gd);
   }
 
+  auto drawFrame = [&]() {
+    if (state == State::Sprites) viewer.draw();
+    else if (state == State::Game) world.draw();
+    else {
+      if (front.screen() == ns::Frontend::Screen::Pause) world.draw();
+      front.draw();
+    }
+  };
   if (!shot.empty()) {
-    if (worldMode) world.draw();
-    else v.draw();
+    drawFrame();
     bool ok = r.screenshot(shot);
     std::printf("%s %s\n", ok ? "wrote" : "FAILED to write", shot.c_str());
     return ok ? 0 : 1;
   }
 
+  bool running = true;
   Uint64 last = SDL_GetPerformanceCounter();
-  while (!v.wantsQuit() && !world.wantsQuit()) {
+  while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_TAB) {
-        worldMode = !worldMode;
+      if (e.type == SDL_QUIT) running = false;
+      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_TAB && state != State::Menu) {
+        state = state == State::Sprites ? State::Game : State::Sprites;
         continue;
       }
-      if (worldMode) world.handle(e);
-      else v.handle(e);
+      if (state == State::Sprites) {
+        viewer.handle(e);
+        if (viewer.wantsQuit()) running = false;
+      } else if (state == State::Game) {
+        world.handle(e);
+        if (world.menuRequested) {
+          world.menuRequested = false;
+          world.paused = true;
+          front.showPause();
+          front.handle(SDL_Event{});
+          state = State::Menu;
+        }
+      } else {
+        auto act = front.handle(e);
+        switch (act.kind) {
+          case ns::FrontendAction::Play: startCampaign(act.mission); break;
+          case ns::FrontendAction::Skirmish:
+            world.buildTestScene(1);
+            currentMission.clear();
+            state = State::Game;
+            break;
+          case ns::FrontendAction::Resume:
+            world.paused = false;
+            state = State::Game;
+            break;
+          case ns::FrontendAction::Restart:
+            world.paused = false;
+            if (!currentMission.empty()) startCampaign(currentMission);
+            else world.buildTestScene(1), state = State::Game;
+            break;
+          case ns::FrontendAction::QuitToMenu:
+            world.paused = false;
+            front.showTitle();
+            break;
+          case ns::FrontendAction::Quit: running = false; break;
+          default: break;
+        }
+      }
     }
     Uint64 now = SDL_GetPerformanceCounter();
     double dt = double(now - last) / SDL_GetPerformanceFrequency();
     last = now;
-    if (worldMode) {
+    if (state == State::Game) {
       world.update(dt);
-      world.draw();
-    } else {
-      v.update(dt);
-      v.draw();
+      int oc = world.outcome();
+      if (oc != 0 && !currentMission.empty()) {
+        front.showResult(currentMission, oc > 0);
+        state = State::Menu;
+      }
+    } else if (state == State::Sprites) {
+      viewer.update(dt);
     }
+    drawFrame();
     SDL_RenderPresent(r.sdl());
   }
   return 0;

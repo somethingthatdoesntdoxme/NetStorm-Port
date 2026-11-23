@@ -86,6 +86,8 @@ struct Effect {
 };
 
 struct PlayerState {
+  std::vector<std::string> tech;  // lower-case unit names this player may build (empty = all)
+  uint16_t allies = 0;            // bitmask of allied players
   float power = 0;  // Storm Power
   int delivered = 0;
   std::vector<std::string> ready;  // finished units waiting to be placed
@@ -127,6 +129,11 @@ class Sim {
   // Types a priest can construct.
   std::vector<const TypeInfo*> constructable() const;
   const TypeInfo* registryType(const std::string& name) const { return gd_.registry.byName(name); }
+  bool allied(int a, int b) const {
+    return a == b || (a > 0 && b > 0 && a <= 8 && b <= 8 && ((players_[size_t(a)].allies >> b) & 1));
+  }
+  // +1 = player has won (no un-allied opponents left), -1 = lost, 0 = still going.
+  int outcome(int player) const;
   bool eliminated(int player) const { return player >= 0 && player <= 8 && out_[size_t(player)]; }
   static constexpr float kRuneTime = 6.0f;  // seconds per rune, 5 runes
 

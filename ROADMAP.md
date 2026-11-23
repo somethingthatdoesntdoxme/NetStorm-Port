@@ -80,3 +80,9 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - No original assets in the repo, ever. The game asks for your install folder.
 - Not trying to be wire-compatible with the community servers; ours is its own
   protocol. Could revisit later.
+
+## Single player (done)
+- Title screen using the install's own title art, campaign chapters, Easy/Normal/Hard, mission list following the original "Next Mission" chain (all 16 missions), briefings, success/failure screens with Next/Retry.
+- Progress saved to the user pref dir (progress.txt); completed missions marked with *.
+- ESC in game opens pause menu (Resume / Restart / Quit to menu). Mission HUD shows title + players in their colours.
+- Missing: tutorials (no forts), scripted in-mission events (surrender/notes dialogs), tech unlocks via sacrifice.

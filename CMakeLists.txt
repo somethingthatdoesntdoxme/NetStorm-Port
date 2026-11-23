@@ -22,6 +22,8 @@ add_library(nscore STATIC
   src/data/GameData.cpp
   src/data/TypeRegistry.cpp
   src/data/FortFile.cpp
+  src/data/MissionInfo.cpp
+  src/data/Gif.cpp
   src/world/Island.cpp
   src/world/Mission.cpp
   src/game/BridgePieces.cpp
@@ -41,6 +43,7 @@ add_executable(netstorm
   src/render/SpriteCache.cpp
   src/app/Viewer.cpp
   src/app/WorldView.cpp
+  src/app/Frontend.cpp
   src/app/main.cpp
 )
 target_link_libraries(netstorm PRIVATE nscore)

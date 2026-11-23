@@ -166,11 +166,16 @@ void WorldView::handle(const SDL_Event& e) {
             selectedWorkshop_ = dropIndex_ = selected_ = -1;
             constructType_.clear();
           } else {
-            quit_ = true;
+            menuRequested = true;
           }
           break;
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: queue_.rotate(); break;
+        case SDLK_p: paused = !paused; break;
+        case SDLK_EQUALS:
+        case SDLK_KP_PLUS: speed = std::min(4.0f, speed * 2); break;
+        case SDLK_MINUS:
+        case SDLK_KP_MINUS: speed = std::max(0.25f, speed / 2); break;
         case SDLK_b: autoBuild(1); break;  // let the AI place one piece
         case SDLK_i:
           aiForMe_ = !aiForMe_;
@@ -295,8 +300,8 @@ void WorldView::handle(const SDL_Event& e) {
 
 void WorldView::update(double dt) {
   time_ += dt;
-  if (sim_) {
-    simAcc_ += std::min(dt, 0.25);
+  if (sim_ && !paused) {
+    simAcc_ += std::min(dt, 0.25) * speed;
     while (simAcc_ >= Sim::kDt) {
       sim_->step();
       for (auto& ai : ais_)
@@ -355,12 +360,77 @@ void WorldView::drawSky() {
     }
 }
 
-// Player colours for owned-island rims.
-static SDL_Color playerColour(int owner) {
-  static const SDL_Color kPlayer[9] = {{0, 0, 0, 0},       {235, 45, 35, 255}, {45, 120, 255, 255},
-                                       {250, 215, 45, 255}, {45, 205, 75, 255}, {205, 65, 225, 255},
-                                       {45, 225, 225, 255}, {250, 145, 35, 255}, {240, 240, 240, 255}};
-  return kPlayer[(owner >= 0 && owner <= 8) ? owner : 0];
+// Player colours for owned-island rims. Missions can name colours per player.
+SDL_Color WorldView::colourOf(int owner) const {
+  static const SDL_Color kDefault[9] = {{0, 0, 0, 0},       {235, 45, 35, 255}, {45, 120, 255, 255},
+                                        {250, 215, 45, 255}, {45, 205, 75, 255}, {205, 65, 225, 255},
+                                        {45, 225, 225, 255}, {250, 145, 35, 255}, {240, 240, 240, 255}};
+  owner = (owner >= 0 && owner <= 8) ? owner : 0;
+  return colours_[size_t(owner)].a ? colours_[size_t(owner)] : kDefault[owner];
+}
+
+static SDL_Color namedColour(const std::string& n) {
+  if (n == "red") return {235, 45, 35, 255};
+  if (n == "blue") return {45, 120, 255, 255};
+  if (n == "yellow") return {250, 215, 45, 255};
+  if (n == "green") return {45, 205, 75, 255};
+  if (n == "purple") return {170, 70, 230, 255};
+  if (n == "orange") return {250, 145, 35, 255};
+  if (n == "white") return {240, 240, 240, 255};
+  if (n == "cyan" || n == "teal") return {45, 225, 225, 255};
+  return {0, 0, 0, 0};
+}
+
+bool WorldView::startMission(const MissionInfo& info) {
+  if (!loadMissionByName(info.fort + ".fort")) return false;
+  sceneName_ = info.title;
+  missionTitle_ = info.title;
+  player_ = 1;
+  colours_ = {};
+  colours_[1] = {45, 120, 255, 255};  // you are blue
+  for (int p = 1; p <= 8; ++p) {
+    const MissionPlayer& mp = info.players[size_t(p)];
+    PlayerState& ps = sim_->player(p);
+    names_[size_t(p)] = mp.present ? mp.name : "";
+    if (!mp.present) continue;
+    ps.power = mp.startMoney;
+    ps.tech.clear();
+    for (auto t : mp.tech) {
+      std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
+      ps.tech.push_back(t);
+    }
+    ps.allies = 0;
+    for (int a : mp.allies)
+      if (a >= 1 && a <= 8) ps.allies |= uint16_t(1 << a);
+    if (p != 1 && !mp.colour.empty()) colours_[size_t(p)] = namedColour(mp.colour);
+    if (p != 1 && colours_[size_t(p)].a == 0) colours_[size_t(p)] = {235, 45, 35, 255};
+  }
+  // Alliances are mutual.
+  for (int a = 1; a <= 8; ++a)
+    for (int b = 1; b <= 8; ++b)
+      if ((sim_->player(a).allies >> b) & 1) sim_->player(b).allies |= uint16_t(1 << a);
+  // AIs for every present opponent/ally; extra golems per "collectors".
+  ais_.clear();
+  ais_.emplace_back(player_, uint32_t(4242));  // only runs when "AI plays for me" is on
+  const TypeInfo* golem = gd_.registry.byName("sunWalker");
+  for (int p = 2; p <= 8; ++p) {
+    const MissionPlayer& mp = info.players[size_t(p)];
+    bool hasStuff = false;
+    for (auto& e : sim_->entities())
+      if (e.owner == p) hasStuff = true;
+    if (!mp.present || !hasStuff) continue;
+    SkirmishAi ai(p, uint32_t(1000 + p * 77));
+    ai.setMoveInterval(mp.timeBetweenMoves);
+    ais_.push_back(ai);
+    int have = 0, temple = -1;
+    for (auto& e : sim_->entities()) {
+      if (e.owner == p && e.role == Role::Golem) ++have;
+      if (e.owner == p && e.role == Role::Temple) temple = e.id;
+    }
+    for (int k = have; k < std::min(mp.collectors, 6) && temple >= 0 && golem; ++k)
+      sim_->spawnWalkerNear(golem, p, temple);
+  }
+  return true;
 }
 
 void WorldView::drawIsland(const Island& isl) {
@@ -400,7 +470,7 @@ void WorldView::drawIsland(const Island& isl) {
       float ax = ox + (x + 1) * kCellW - 1, ay = oy + (y + 1) * kCellH - 1;
       int own = isl.ownerAt(x, y) ? isl.ownerAt(x, y) : isl.owner;
       if (own > 0 && tc.cluster != "AA")
-        blit(cache_.tinted(isle_->set, isle_->frame(line), playerColour(own), rimMask_), ax, ay);
+        blit(cache_.tinted(isle_->set, isle_->frame(line), colourOf(own), rimMask_), ax, ay);
       else
         blit(cache_.get(isle_->set, isle_->frame(line)), ax, ay);
       if (showGrid_) {
@@ -582,6 +652,29 @@ void WorldView::drawHud() {
   SDL_Color pc = me.power < 1000 ? red : me.power < 2000 ? SDL_Color{255, 230, 60, 255} : white;
   float x = drawText(ren, 160, 21, 2, "STORM POWER ", gold);
   drawText(ren, 160 + x, 21, 2, std::to_string(int(me.power)), pc);
+
+  // Mission title and the other players, in their colours (top right).
+  if (!missionTitle_.empty()) {
+    int sw, sh;
+    r_.outputSize(sw, sh);
+    std::string t = missionTitle_;
+    for (auto& c : t) c = char(std::toupper(static_cast<unsigned char>(c)));
+    int rows = 1;
+    for (int p = 1; p <= 8; ++p) rows += !names_[size_t(p)].empty();
+    float w = 360;
+    panel({float(sw) - w - 12, 12, w, 14.0f + rows * 18.0f});
+    drawText(ren, float(sw) - w, 20, 2, t, gold);
+    float yy = 40;
+    for (int p = 1; p <= 8; ++p) {
+      if (names_[size_t(p)].empty()) continue;
+      std::string n = names_[size_t(p)];
+      for (auto& c : n) c = char(std::toupper(static_cast<unsigned char>(c)));
+      bool out = sim_->outcome(p) < 0;
+      std::string tag = p != player_ && sim_->allied(player_, p) ? " (ALLY)" : "";
+      drawText(ren, float(sw) - w, yy, 2, n + tag + (out ? " - OUT" : ""), out ? grey : colourOf(p));
+      yy += 18;
+    }
+  }
 
   // Ready units waiting to be dropped.
   float ry = 56;

@@ -7,10 +7,12 @@
 #include "render/SpriteCache.h"
 #include "world/Island.h"
 #include "world/Mission.h"
+#include "data/MissionInfo.h"
 #include "game/BridgePieces.h"
 #include "game/Sim.h"
 #include "game/Ai.h"
 
+#include <array>
 #include <memory>
 
 namespace ns {
@@ -35,6 +37,14 @@ class WorldView {
   // Loads mission `index` from the script archive (sorted list of .fort files).
   bool loadMission(int index);
   bool loadMissionByName(const std::string& part);
+  // Campaign: load the mission's map and apply its settings (you = player 1).
+  bool startMission(const MissionInfo& info);
+  // +1 won, -1 lost, 0 playing.
+  int outcome() const { return sim_ ? sim_->outcome(player_) : 0; }
+  SDL_Color colourOf(int owner) const;
+  bool paused = false;
+  bool menuRequested = false;  // ESC with nothing selected
+  float speed = 1.0f;
   int autoBuild(int pieces);
   // Test hook: open the first own workshop and start building its first affordable unit.
   std::string demoProduction();
@@ -96,6 +106,9 @@ class WorldView {
   std::vector<std::string> missions_;
   int missionIdx_ = -1;
   std::string sceneName_ = "test layout";
+  std::array<SDL_Color, 9> colours_{};
+  std::string missionTitle_;
+  std::array<std::string, 9> names_{};
   void frame(float minx, float miny, float maxx, float maxy);
   std::array<bool, 256> rimMask_{};  // palette indices used only by island rims
 };

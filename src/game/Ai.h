@@ -1,6 +1,8 @@
 #pragma once
 // Skirmish AI v1. Plays the same moves a human can: bridge pieces, workshop
 // production, dropping finished units. Deterministic (driven by sim ticks).
+#include <algorithm>
+
 #include "game/BridgePieces.h"
 #include "game/Sim.h"
 
@@ -11,6 +13,8 @@ class SkirmishAi {
   SkirmishAi(int player, uint32_t seed) : player_(player), queue_(seed), seed_(seed) {}
   void step(Sim& sim, Island& world);  // call every sim tick
   int player() const { return player_; }
+  // Mission setting "timeBetweenMoves" (seconds between bridge moves).
+  void setMoveInterval(float seconds) { bridgeEvery_ = std::max(10, int(seconds * 20 / 2)); }
 
  private:
   void produce(Sim& sim);
@@ -21,6 +25,7 @@ class SkirmishAi {
   BridgeQueue queue_;
   uint32_t seed_;
   int tick_ = 0;
+  int bridgeEvery_ = 30;
 };
 
 }  // namespace ns

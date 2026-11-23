@@ -1,6 +1,7 @@
 #include "game/Sim.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <deque>
 #include <cstdio>
@@ -65,6 +66,18 @@ void Sim::log(const std::string& m) {
   std::snprintf(t, sizeof t, "[%ds] ", int(time_));
   events_.push_back(t + m);
   if (events_.size() > 200) events_.erase(events_.begin());
+}
+
+int Sim::outcome(int player) const {
+  std::array<int, 9> strength{};
+  for (auto& e : ents_)
+    if (e.alive && e.owner > 0 && e.owner <= 8 && !out_[size_t(e.owner)] && e.role != Role::Golem &&
+        e.role != Role::Geyser)
+      strength[size_t(e.owner)]++;
+  if (out_[size_t(player)] || strength[size_t(player)] == 0) return -1;
+  for (int p = 1; p <= 8; ++p)
+    if (strength[size_t(p)] && !allied(p, player)) return 0;
+  return time_ > 1 ? 1 : 0;
 }
 
 Entity* Sim::find(int id) {
@@ -132,7 +145,7 @@ bool Sim::lineBlocked(float x0, float y0, float x1, float y1, int owner, int& bl
   float best = 2.0f;
   blocker = -1;
   for (auto& e : ents_) {
-    if (!e.alive || e.owner == owner || !e.type || !e.type->def) continue;
+    if (!e.alive || allied(e.owner, owner) || !e.type || !e.type->def) continue;
     if (e.type->def->str("group") != "blocker" && e.type->def->num("height", 0) < 2) continue;
     float cx = centreX(e), cy = centreY(e);
     float dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
@@ -164,7 +177,7 @@ void Sim::stepShooter(Entity& s) {
   Entity* best = nullptr;
   float bestD = range * range;
   for (auto& e : ents_) {
-    if (!e.alive || e.owner == 0 || e.owner == s.owner || e.role == Role::Geyser) continue;
+    if (!e.alive || e.owner == 0 || allied(e.owner, s.owner) || e.role == Role::Geyser) continue;
     if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
     float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
     if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
@@ -202,7 +215,7 @@ void Sim::stepShooter(Entity& s) {
     for (int y = int(sy) - r; y <= int(sy) + r; ++y)
       for (int x = int(sx) - r; x <= int(sx) + r; ++x) {
         int b = world_.bridgeAt(x, y);
-        if (!b || b == s.owner || b == 9) continue;
+        if (!b || allied(b, s.owner) || b == 9) continue;
         float dx = x + 0.5f - sx, dy = y + 0.5f - sy, d2 = dx * dx + dy * dy;
         if (d2 < bd) bd = d2, bx = x, by = y;
       }
@@ -527,6 +540,12 @@ std::vector<const TypeInfo*> Sim::buildable(int workshopId) const {
     const TypeInfo* t = gd_.registry.bySet(s);
     if (!t || !t->def || t->def->str("theme") != theme) continue;
     if (t->def->num("cost", 0) <= 0 || t->name == "bulf") continue;
+    const auto& tech = players_[size_t(w->owner)].tech;
+    if (!tech.empty()) {
+      std::string ln = t->name;
+      std::transform(ln.begin(), ln.end(), ln.begin(), [](unsigned char c) { return std::tolower(c); });
+      if (std::find(tech.begin(), tech.end(), ln) == tech.end()) continue;
+    }
     bool unit = t->def->hasFlag("emplacement") || (t->def->hasFlag("walker") && t->name != "sunWalker") ||
                 t->def->hasFlag("flyer") || t->def->str("group") == "battery";
     if (unit) out.push_back(t);
@@ -686,7 +705,7 @@ bool Sim::orderCapture(int golemId, int priestId, std::string* why) {
   Entity* g = find(golemId);
   Entity* pr = find(priestId);
   if (!g || g->role != Role::Golem) return fail("select a golem");
-  if (!pr || pr->role != Role::Priest || pr->owner == g->owner) return fail("target an enemy priest");
+  if (!pr || pr->role != Role::Priest || allied(pr->owner, g->owner)) return fail("target an enemy priest");
   if (!pr->immobile) return fail("damage him to half health first");
   bool haveAltar = false;
   for (auto& e : ents_)

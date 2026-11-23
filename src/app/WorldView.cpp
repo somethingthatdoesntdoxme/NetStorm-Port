@@ -883,7 +883,7 @@ void WorldView::drawObjects() {
   std::vector<Item> order;
   if (!sim_) return;
   for (auto& o : sim_->entities()) {
-    if (!o.alive || !o.type || !o.type->def || o.type->set < 0) continue;
+    if (!o.alive || !o.type || !o.type->def || o.type->set < 0 || o.role == Role::Flyer) continue;
     float wx, wy;
     anchorOf(o, wx, wy);
     order.push_back({wy, &o});
@@ -1003,6 +1003,7 @@ void WorldView::draw() {
   drawSky();
   for (auto& isl : islands_) drawIsland(isl);
   drawObjects();
+  drawFlyers();
   drawCombat();
   if (dropIndex_ < 0) drawBuildUi();
   drawHud();
@@ -1190,6 +1191,61 @@ std::string WorldView::debugAi() {
            build + "\n";
   }
   return out;
+}
+
+// Air units: shadow on the ground, craft ~28px up, facing one of 8 directions.
+void WorldView::drawFlyers() {
+  if (!sim_) return;
+  SDL_Renderer* rr = r_.sdl();
+  for (auto& o : sim_->entities()) {
+    if (!o.alive || o.role != Role::Flyer || !o.type || !o.type->def || o.type->set < 0) continue;
+    const auto& frames = o.type->def->frames;
+    std::vector<int> dirs;  // the "default" cluster: A00..A07
+    std::string cl;
+    for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
+      if (frames[i].label.find("default") != std::string::npos) cl = frames[i].cluster;
+    for (size_t i = 0; i < frames.size() && i < size_t(o.type->imageFrames); ++i)
+      if (frames[i].cluster == cl && frames[i].label.find("help") == std::string::npos) dirs.push_back(int(i));
+    if (dirs.empty()) continue;
+    // Frame 0 faces north (screen up), then clockwise.
+    float a = o.heading + 1.5707963f;
+    int n = int(dirs.size());
+    int idx = int(std::lround(a / (6.2831853f / float(n)))) % n;
+    if (idx < 0) idx += n;
+    int line = dirs[size_t(idx)];
+    float wx = islands_[0].worldX + o.x * kCellW, wy = islands_[0].worldY + islands_[0].bob + o.y * kCellH;
+    float bob = float(std::sin(time_ * 5 + o.id)) * 1.5f;
+    int sf = o.type->shadowFrame(line);
+    if (sf >= 0 && sf < gd_.shapes.frameCount(o.type->set)) {
+      blit(cache_.shadow(o.type->set, sf), wx, wy);
+    } else {
+      SDL_FRect d = cam_.toScreen(wx - 5, wy - 2, 10, 4);
+      SDL_SetRenderDrawColor(rr, 0, 0, 0, 90);
+      SDL_RenderFillRectF(rr, &d);
+    }
+    const SpriteTex& st = cache_.get(o.type->set, o.type->frame(line));
+    if (o.flash > 0 && st.tex) SDL_SetTextureColorMod(st.tex, 255, 120, 110);
+    blit(st, wx, wy - 28 + bob);
+    if (st.tex) SDL_SetTextureColorMod(st.tex, 255, 255, 255);
+  }
+}
+
+int WorldView::flyersAirborne() const {
+  int n = 0;
+  if (sim_)
+    for (auto& e : sim_->entities()) n += e.alive && e.role == Role::Flyer;
+  return n;
+}
+
+void WorldView::focusOnAir() {
+  if (!sim_) return;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.role == Role::Flyer) {
+      cam_.x = islands_[0].worldX + e.x * kCellW;
+      cam_.y = islands_[0].worldY + e.y * kCellH - 10;
+      cam_.zoom = 3.0f;
+      return;
+    }
 }
 
 }  // namespace ns

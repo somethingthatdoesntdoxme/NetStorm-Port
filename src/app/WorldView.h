@@ -60,7 +60,9 @@ class WorldView {
   // Test hook: open the first own workshop and start building its first affordable unit.
   std::string demoProduction();
   Sim* sim() { return sim_.get(); }
-  std::string debugAi();  // per-player state dump for headless runs
+  std::string debugAi();
+  int flyersAirborne() const;
+  void focusOnAir();  // test hook: centre the camera on the air fight  // per-player state dump for headless runs
   void setAiForMe(bool b) { aiForMe_ = b; }
   int player() const { return player_; }  // let the bridge AI play `pieces` pieces for the player
   const std::vector<std::string>& missions() const { return missions_; }
@@ -69,6 +71,7 @@ class WorldView {
   void drawSky();
   void drawIsland(const Island& isl);
   void drawObjects();
+  void drawFlyers();
   void drawBridges(const Island& isl, int cx0, int cy0, int cx1, int cy1);
   void drawBuildUi();
   void hoverCell(int sx, int sy);

@@ -23,7 +23,7 @@
 
 namespace ns {
 
-enum class Role : uint8_t { Static, Golem, Priest, Geyser, Temple, Workshop, Generator, Shooter, Altar };
+enum class Role : uint8_t { Static, Golem, Priest, Geyser, Temple, Workshop, Generator, Shooter, Altar, Flyer };
 
 struct Entity {
   int id = 0;
@@ -63,6 +63,9 @@ struct Entity {
   float cooldown = 0;
   int lastTarget = -1;
   float flash = 0;  // >0 while showing damage flash
+  // Flyer (launched by an aviary; `home` = aviary, `target` = what it's attacking)
+  float heading = 0;  // radians, 0 = east
+  float life = 0;     // seconds left
 };
 
 // A shot in flight. Damage is applied when it lands (deterministic: fixed
@@ -105,6 +108,8 @@ class Sim {
   // Spawns a walker on a free walkable cell next to building `nearId`.
   int spawnWalkerNear(const TypeInfo* t, int owner, int nearId);
   void step();  // one fixed tick
+  void stepFlyer(Entity& f);
+  bool launchFlyer(Entity& aviary, Entity& target);
 
   // Workshop production. Returns false if it can't start (cost/energy/busy).
   bool startBuild(int workshopId, const std::string& unitType, std::string* why = nullptr);

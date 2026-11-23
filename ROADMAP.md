@@ -96,3 +96,10 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Attack bridging: once there's no neutral land left, bridge towards open sky within range of enemy buildings.
 - Approximation: temples raise a replacement golem every 30 s up to the mission's collector count (golems have no cost in the data, so the original's replacement rule is still unknown).
 - AI-vs-AI results: TheWarBegins won ~10 min, GuardMyBack won ~25 min, RainVsRain lost ~9 min, skirmish ~6.5 min.
+
+## Air units
+- Aviaries (sun/rain/wind) launch their fury's flyer (sunFlyer/rainFlyer/windFlyer) at enemies within the aviary's range, one airborne per aviary, relaunch after delayBetweenShots (default 6 s; wind 29 s).
+- Flyers fly over everything, circle and strafe their target (hpPerSec), retarget within their aviary's reach, die when lifeSpan runs out or their aviary is destroyed.
+- Archers and aviaries can hit flyers; cannons can't. Flyers don't occupy ground cells.
+- Drawn in 8 directions, ~28px up, with their ground shadow.
+- Not yet: balloons (air transport), thunder aviary (no stats in data), exact flyer speed scale (data speed x4 cells/s, estimated).

@@ -25,6 +25,7 @@ Role roleFor(const TypeInfo* t) {
   if (d.hasFlag("vortex")) return Role::Temple;
   if (d.hasFlag("factory")) return Role::Workshop;
   if (d.hasFlag("walker") && t->name == "sunWalker") return Role::Golem;
+  if (d.hasFlag("flyer")) return Role::Flyer;
   if (d.str("group") == "battery") return Role::Generator;
   if (d.hasFlag("emplacement")) return Role::Shooter;
   return Role::Static;
@@ -97,6 +98,7 @@ void Sim::step() {
     else if (e.role == Role::Shooter) stepShooter(e);
     else if (e.role == Role::Priest) stepPriest(e);
     else if (e.role == Role::Altar) stepAltar(e);
+    else if (e.role == Role::Flyer) stepFlyer(ents_[i]);
   }
   stepProjectiles();
   // Temples slowly replace lost golems (approximation: one per 30 s, up to the
@@ -196,16 +198,26 @@ void Sim::stepShooter(Entity& s) {
   if (need > 0 && energyAt(s.owner, theme, int(s.x), int(s.y)) < need) return;
 
   bool cannon = d.str("group") == "cannon";
+  bool aviary = d.str("group") == "aviary";
+  bool antiAir = d.str("group") == "archer";  // archers shoot flyers; shells and bolts can't
   float sx = centreX(s), sy = centreY(s);
   // Target: nearest enemy thing in range (keep the last target if still valid).
   Entity* best = nullptr;
   float bestD = range * range;
   for (auto& e : ents_) {
     if (!e.alive || e.owner == 0 || allied(e.owner, s.owner) || e.role == Role::Geyser) continue;
+    if (e.role == Role::Flyer && !antiAir && !aviary) continue;
     if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
     float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
     if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
     if (d2 <= bestD) bestD = d2, best = &e;
+  }
+  if (aviary) {
+    // Aviaries launch a flyer at whatever's in range, one airborne at a time.
+    for (auto& f : ents_)
+      if (f.alive && f.role == Role::Flyer && f.home == s.id) return;
+    if (best && launchFlyer(s, *best)) s.cooldown = float(d.num("delayBetweenShots", 6));
+    return;
   }
   float hps = float(d.num("hpPerSec", 10));
   float delay = float(d.num("delayBetweenShots", cannon ? 2.5 : 0.6));
@@ -673,7 +685,7 @@ bool Sim::dropUnit(int player, int readyIndex, int ax, int ay) {
 bool Sim::occupied(int x, int y, int ignoreId) const {
   for (auto& e : ents_) {
     if (!e.alive || e.id == ignoreId || !e.type || !e.type->def) continue;
-    if (e.role == Role::Golem || e.role == Role::Priest) continue;
+    if (e.role == Role::Golem || e.role == Role::Priest || e.role == Role::Flyer) continue;
     int fx = footX(e.type), fy = footY(e.type);
     if (x > int(e.x) - fx && x <= int(e.x) && y > int(e.y) - fy && y <= int(e.y)) return true;
   }
@@ -841,6 +853,76 @@ void Sim::stepAltar(Entity& a) {
     // Everything the sacrificed player owned stops working.
     for (auto& e : ents_)
       if (e.alive && e.owner == victim->owner) e.owner = 0;
+  }
+}
+
+// ---- Air units -----------------------------------------------------------
+
+bool Sim::launchFlyer(Entity& av, Entity& target) {
+  std::string theme = av.type->def->str("theme");
+  if (!theme.empty()) theme[0] = char(std::tolower(static_cast<unsigned char>(theme[0])));
+  const TypeInfo* ft = gd_.registry.byName(theme + "Flyer");
+  if (!ft || !ft->def) return false;
+  int id = spawn(ft, av.owner, centreX(av), centreY(av));
+  Entity* f = find(id);
+  if (!f) return false;
+  f->home = av.id;
+  f->target = target.id;
+  f->life = float(ft->def->num("lifeSpan", 60));
+  if (ft->def->num("maxHitPoints", -1) < 0) f->maxHp = f->hp = 60;
+  f->heading = std::atan2(centreY(target) - f->y, centreX(target) - f->x);
+  log("P" + std::to_string(av.owner) + " launched a " + ft->name);
+  return true;
+}
+
+void Sim::stepFlyer(Entity& f) {
+  Entity* home = find(f.home);
+  f.life -= kDt;
+  if (f.life <= 0 || !home || !home->alive) {  // burnt out, or its aviary is gone
+    f.alive = false;
+    Effect fx;
+    fx.type = gd_.registry.byName("bombExplodeSmall");
+    fx.x = f.x;
+    fx.y = f.y;
+    fx.life = 0.6f;
+    effects_.push_back(fx);
+    return;
+  }
+  const TypeDef& d = *f.type->def;
+  float range = float(home->type->def->num("range", d.num("range", 35)));
+  float hx = centreX(*home), hy = centreY(*home);
+  // Keep the current target while it's alive and within the aviary's reach; otherwise the nearest.
+  Entity* t = find(f.target);
+  auto inReach = [&](const Entity& e) {
+    float dx = centreX(e) - hx, dy = centreY(e) - hy;
+    return dx * dx + dy * dy <= range * range;
+  };
+  if (!t || !t->alive || !inReach(*t) || (t->role == Role::Priest && (t->carriedBy >= 0 || t->chainedAt >= 0))) {
+    t = nullptr;
+    float best = 1e18f;
+    for (auto& e : ents_) {
+      if (!e.alive || e.owner == 0 || allied(e.owner, f.owner) || e.role == Role::Geyser || !inReach(e)) continue;
+      if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
+      float dx = centreX(e) - f.x, dy = centreY(e) - f.y, d2 = dx * dx + dy * dy;
+      if (d2 < best) best = d2, t = &e;
+    }
+    f.target = t ? t->id : -1;
+  }
+  // Fly: towards the target, circling it once close; with no target, loiter over the aviary.
+  float gx = t ? centreX(*t) : hx, gy = t ? centreY(*t) : hy;
+  float dx = gx - f.x, dy = gy - f.y, dist = std::sqrt(dx * dx + dy * dy);
+  float want = std::atan2(dy, dx);
+  if (dist < 3.0f) want += 1.3f;  // circle
+  float diff = std::remainder(want - f.heading, 6.2831853f);
+  float turn = 4.0f * kDt;  // rad/s
+  f.heading += std::clamp(diff, -turn, turn);
+  float speed = float(d.num("speed", 2.0)) * 4.0f;  // cells/s (flyers are much faster than walkers)
+  f.x += std::cos(f.heading) * speed * kDt;
+  f.y += std::sin(f.heading) * speed * kDt;
+  // Strafe: continuous damage while close.
+  if (t && dist < 4.0f) {
+    damage(*t, float(d.num("hpPerSec", 15)) * kDt);
+    t->flash = 0.1f;
   }
 }
 

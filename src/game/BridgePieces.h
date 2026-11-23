@@ -38,7 +38,7 @@ bool canPlaceBridge(const Island& world, const BridgeShape& shape, int x, int y,
 int placeBridge(Island& world, const BridgeShape& shape, int x, int y, int player);
 
 // Simple bridge AI: finds the best legal drop of `queue`'s current piece
-// (any rotation) that brings `player` closer to unowned land. Returns false if
+// (any rotation) that brings `player` closer to unowned or enemy land. Returns false if
 // nothing useful fits. Applies the rotation to the queue.
 bool bestBridgeMove(const Island& world, BridgeQueue& queue, int player, int& outX, int& outY);
 

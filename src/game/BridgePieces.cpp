@@ -106,7 +106,7 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
   int minX = W, minY = H, maxX = 0, maxY = 0;
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
-      if (w.filled(x, y) && w.ownerAt(x, y) == 0) {
+      if (w.filled(x, y) && w.ownerAt(x, y) != player) {  // unowned or enemy land
         dist[size_t(y) * W + x] = 0;
         q.push_back(y * W + x);
       }
@@ -131,6 +131,18 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
       }
     }
   }
+  // Current frontier: best distance already reachable from our territory.
+  int current = std::numeric_limits<int>::max();
+  for (int y = std::max(1, minY - 1); y <= std::min(H - 2, maxY + 1); ++y)
+    for (int x = std::max(1, minX - 1); x <= std::min(W - 2, maxX + 1); ++x) {
+      if (w.filled(x, y) || w.bridgeAt(x, y)) continue;
+      const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (auto& n : nb)
+        if ((w.filled(x + n[0], y + n[1]) && w.ownerAt(x + n[0], y + n[1]) == player) ||
+            w.bridgeAt(x + n[0], y + n[1]) == player)
+          current = std::min(current, dist[size_t(y) * W + x]);
+    }
+  if (current == 0) return false;  // already touching the target: nothing to bridge
   int best = std::numeric_limits<int>::max(), bx = 0, by = 0, brot = 0;
   BridgeShape s = queue.current();
   for (int rot = 0; rot < 4; ++rot, s = s.rotated()) {
@@ -139,7 +151,7 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
         if (!canPlaceBridge(w, s, x, y, player)) continue;
         int score = std::numeric_limits<int>::max();
         for (auto [dx, dy] : s.cells) score = std::min(score, dist[size_t(y + dy) * W + x + dx]);
-        if (score == std::numeric_limits<int>::max()) continue;
+        if (score == std::numeric_limits<int>::max() || score >= current) continue;  // must make progress
         score = score * 10 - int(s.cells.size());  // prefer progress, then bigger pieces
         if (score < best) best = score, bx = x, by = y, brot = rot;
       }

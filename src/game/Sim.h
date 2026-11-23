@@ -47,6 +47,30 @@ struct Entity {
   // Workshop
   std::string building;  // type being built ("" = idle)
   float progress = 0;    // seconds done
+  // Shooter
+  float cooldown = 0;
+  int lastTarget = -1;
+  float flash = 0;  // >0 while showing damage flash
+};
+
+// A shot in flight. Damage is applied when it lands (deterministic: fixed
+// flight time from distance).
+struct Projectile {
+  const TypeInfo* missile = nullptr;  // sprite (may be null: drawn as a spark)
+  int owner = 0;
+  float x0, y0, x1, y1;  // cells
+  float t = 0, dur = 0.5f;
+  bool arc = false;     // cannons lob shells
+  int target = -1;      // entity id (or -1 for a bridge cell)
+  int bridgeX = -1, bridgeY = -1;
+  float damage = 0;
+  std::string theme;
+};
+
+struct Effect {
+  const TypeInfo* type = nullptr;  // explosion sprite set
+  float x, y;                      // world cells (anchor)
+  float t = 0, life = 1.0f;
 };
 
 struct PlayerState {
@@ -62,6 +86,8 @@ class Sim {
   Sim(const GameData& gd, Island& world) : gd_(gd), world_(world) {}
 
   int spawn(const TypeInfo* t, int owner, float x, float y);
+  // Spawns a walker on a free walkable cell next to building `nearId`.
+  int spawnWalkerNear(const TypeInfo* t, int owner, int nearId);
   void step();  // one fixed tick
 
   // Workshop production. Returns false if it can't start (cost/energy/busy).
@@ -72,6 +98,12 @@ class Sim {
   bool canDropUnit(const TypeInfo* t, int x, int y, int player) const;
   bool dropUnit(int player, int readyIndex, int x, int y);
 
+  const std::vector<Projectile>& projectiles() const { return shots_; }
+  const std::vector<Effect>& effects() const { return effects_; }
+  // Damage an entity (applies kill + island collapse).
+  void damage(Entity& e, float amount);
+  int winner() const { return winner_; }  // >0 once only one player has buildings left
+
   // Energy of a fury available to `player` at a cell (sum of generators in range).
   int energyAt(int player, const std::string& theme, int x, int y) const;
 
@@ -80,10 +112,18 @@ class Sim {
   Entity* find(int id);
   PlayerState& player(int p) { return players_[size_t(std::clamp(p, 0, 8))]; }
   double time() const { return time_; }
+  // Debug: walking path length between two cells (-1 if unreachable).
+  int pathLength(int sx, int sy, int tx, int ty) const { auto p = findPath(sx, sy, tx, ty, 0, 0); return p.empty() ? -1 : int(p.size()); }
+  bool walkableAt(int x, int y) const { return walkable(x, y); }
 
  private:
   void stepGolem(Entity& g);
   void stepWorkshop(Entity& w);
+  void stepShooter(Entity& s);
+  void stepProjectiles();
+  void kill(Entity& e);
+  void collapseLand(const Entity& e);
+  bool lineBlocked(float x0, float y0, float x1, float y1, int shooterOwner, int& blocker) const;
   bool walkable(int x, int y) const { return world_.filled(x, y) || world_.bridgeAt(x, y); }
   std::vector<std::pair<int, int>> findPath(int sx, int sy, int tx, int ty, int tw, int th) const;
   void approach(const Entity& b, int& cx, int& cy) const;  // cell next to a building
@@ -92,6 +132,9 @@ class Sim {
   Island& world_;
   std::vector<Entity> ents_;
   std::array<PlayerState, 9> players_{};
+  std::vector<Projectile> shots_;
+  std::vector<Effect> effects_;
+  int winner_ = 0;
   int nextId_ = 1;
   double time_ = 0;
 };

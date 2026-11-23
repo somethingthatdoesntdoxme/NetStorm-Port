@@ -42,6 +42,22 @@ int Sim::spawn(const TypeInfo* t, int owner, float x, float y) {
   return e.id;
 }
 
+int Sim::spawnWalkerNear(const TypeInfo* t, int owner, int nearId) {
+  Entity* b = find(nearId);
+  if (!b) return -1;
+  int cx, cy;
+  approach(*b, cx, cy);
+  if (!walkable(cx, cy)) {
+    // Any walkable cell in a ring around the footprint.
+    int fx = footX(b->type), fy = footY(b->type);
+    for (int r = 1; r < 6 && !walkable(cx, cy); ++r)
+      for (int y = int(b->y) - fy + 1 - r; y <= int(b->y) + r; ++y)
+        for (int x = int(b->x) - fx + 1 - r; x <= int(b->x) + r; ++x)
+          if (walkable(x, y)) cx = x, cy = y;
+  }
+  return spawn(t, owner, cx + 0.5f, cy + 0.5f);
+}
+
 Entity* Sim::find(int id) {
   for (auto& e : ents_)
     if (e.id == id && e.alive) return &e;
@@ -53,9 +69,205 @@ void Sim::step() {
   for (size_t i = 0; i < ents_.size(); ++i) {
     Entity& e = ents_[i];
     if (!e.alive) continue;
+    if (e.flash > 0) e.flash -= kDt;
     if (e.role == Role::Golem) stepGolem(e);
     else if (e.role == Role::Workshop) stepWorkshop(e);
+    else if (e.role == Role::Shooter) stepShooter(e);
   }
+  stepProjectiles();
+  for (auto& fx : effects_) fx.t += kDt;
+  effects_.erase(std::remove_if(effects_.begin(), effects_.end(), [](const Effect& f) { return f.t >= f.life; }),
+                 effects_.end());
+  // Drop dead entities once in a while (ids stay unique).
+  if (int(time_ / kDt) % 100 == 0)
+    ents_.erase(std::remove_if(ents_.begin(), ents_.end(), [](const Entity& e) { return !e.alive; }), ents_.end());
+  // Winner: the only player who still has a priest or buildings.
+  if (!winner_) {
+    std::array<int, 9> alive{};
+    for (auto& e : ents_)
+      if (e.alive && e.owner > 0 && e.role != Role::Golem && e.role != Role::Geyser) alive[size_t(e.owner)]++;
+    int count = 0, last = 0;
+    for (int p = 1; p <= 8; ++p)
+      if (alive[size_t(p)]) ++count, last = p;
+    if (count == 1 && time_ > 1) winner_ = last;
+  }
+}
+
+// ---- combat --------------------------------------------------------------
+
+namespace {
+float centreX(const Entity& e) {
+  int fx = footX(e.type);
+  return e.role == Role::Golem || e.role == Role::Priest ? e.x : e.x - fx / 2.0f + 0.5f;
+}
+float centreY(const Entity& e) {
+  int fy = footY(e.type);
+  return e.role == Role::Golem || e.role == Role::Priest ? e.y : e.y - fy / 2.0f + 0.5f;
+}
+// Missile sprite per shooter (from the type list).
+const char* missileFor(const std::string& shooter) {
+  if (shooter == "sunArcher") return "sunDisc";
+  if (shooter == "windArcher") return "bolt";
+  if (shooter == "rainCannon") return "rainCannonMissile";
+  if (shooter == "thunderCannon") return "thunderCannonMissile";
+  if (shooter == "thunderArcher") return "manabolt";
+  return "blankMissile";
+}
+}  // namespace
+
+// Blockers (height >= 2, enemy-owned) on the straight line stop direct fire.
+bool Sim::lineBlocked(float x0, float y0, float x1, float y1, int owner, int& blocker) const {
+  float best = 2.0f;
+  blocker = -1;
+  for (auto& e : ents_) {
+    if (!e.alive || e.owner == owner || !e.type || !e.type->def) continue;
+    if (e.type->def->str("group") != "blocker" && e.type->def->num("height", 0) < 2) continue;
+    float cx = centreX(e), cy = centreY(e);
+    float dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+    if (len2 < 1e-4f) continue;
+    float t = ((cx - x0) * dx + (cy - y0) * dy) / len2;
+    if (t <= 0.05f || t >= 0.95f) continue;
+    float px = x0 + dx * t - cx, py = y0 + dy * t - cy;
+    if (px * px + py * py <= 2.0f && t < best) best = t, blocker = e.id;
+  }
+  return blocker >= 0;
+}
+
+void Sim::stepShooter(Entity& s) {
+  if (s.cooldown > 0) {
+    s.cooldown -= kDt;
+    return;
+  }
+  const TypeDef& d = *s.type->def;
+  float range = float(d.num("range", 0));
+  if (range <= 0) return;  // blockers, generators...
+  // Needs energy of its fury to fire.
+  int need = int(d.num("minUsage", 0));
+  std::string theme = d.str("theme");
+  if (need > 0 && energyAt(s.owner, theme, int(s.x), int(s.y)) < need) return;
+
+  bool cannon = d.str("group") == "cannon";
+  float sx = centreX(s), sy = centreY(s);
+  // Target: nearest enemy thing in range (keep the last target if still valid).
+  Entity* best = nullptr;
+  float bestD = range * range;
+  for (auto& e : ents_) {
+    if (!e.alive || e.owner == 0 || e.owner == s.owner || e.role == Role::Geyser) continue;
+    float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
+    if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
+    if (d2 <= bestD) bestD = d2, best = &e;
+  }
+  float hps = float(d.num("hpPerSec", 10));
+  float delay = float(d.num("delayBetweenShots", cannon ? 2.5 : 0.6));
+  Projectile p;
+  p.owner = s.owner;
+  p.x0 = sx;
+  p.y0 = sy;
+  p.arc = cannon;
+  p.damage = hps * delay;
+  p.theme = theme;
+  p.missile = gd_.registry.byName(missileFor(s.type->name));
+  if (best) {
+    p.target = best->id;
+    p.x1 = centreX(*best);
+    p.y1 = centreY(*best);
+    if (!cannon) {
+      int blk;
+      if (lineBlocked(sx, sy, p.x1, p.y1, s.owner, blk)) {
+        p.target = blk;
+        Entity* b = find(blk);
+        p.x1 = centreX(*b);
+        p.y1 = centreY(*b);
+      }
+    }
+    s.lastTarget = best->id;
+  } else if (cannon) {
+    // Cannons with nothing to shoot break enemy bridges in range.
+    int bx = -1, by = -1;
+    float bd = range * range;
+    int r = int(range);
+    for (int y = int(sy) - r; y <= int(sy) + r; ++y)
+      for (int x = int(sx) - r; x <= int(sx) + r; ++x) {
+        int b = world_.bridgeAt(x, y);
+        if (!b || b == s.owner || b == 9) continue;
+        float dx = x + 0.5f - sx, dy = y + 0.5f - sy, d2 = dx * dx + dy * dy;
+        if (d2 < bd) bd = d2, bx = x, by = y;
+      }
+    if (bx < 0) return;
+    p.bridgeX = bx;
+    p.bridgeY = by;
+    p.x1 = bx + 0.5f;
+    p.y1 = by + 0.5f;
+  } else {
+    return;
+  }
+  float dist = std::sqrt((p.x1 - p.x0) * (p.x1 - p.x0) + (p.y1 - p.y0) * (p.y1 - p.y0));
+  p.dur = std::max(0.15f, dist / (cannon ? 14.0f : 24.0f));
+  shots_.push_back(p);
+  s.cooldown = delay;
+}
+
+void Sim::stepProjectiles() {
+  for (auto& p : shots_) {
+    p.t += kDt;
+    if (p.t < p.dur) continue;
+    if (p.target >= 0) {
+      if (Entity* e = find(p.target)) damage(*e, p.damage);
+    } else if (p.bridgeX >= 0) {
+      world_.setBridge(p.bridgeX, p.bridgeY, 0);
+    }
+    Effect fx;
+    fx.type = gd_.registry.byName("bombExplodeSmall");
+    fx.x = p.x1;
+    fx.y = p.y1;
+    fx.life = 0.5f;
+    effects_.push_back(fx);
+  }
+  shots_.erase(std::remove_if(shots_.begin(), shots_.end(), [](const Projectile& p) { return p.t >= p.dur; }),
+               shots_.end());
+}
+
+void Sim::damage(Entity& e, float amount) {
+  if (!e.alive) return;
+  e.hp -= int(std::ceil(amount));
+  e.flash = 0.15f;
+  if (e.hp <= 0) kill(e);
+}
+
+void Sim::kill(Entity& e) {
+  e.alive = false;
+  Effect fx;
+  fx.type = gd_.registry.byName(footX(e.type) >= 4 ? "bombExplodeLarge" : "bombExplodeMedium");
+  fx.x = centreX(e);
+  fx.y = centreY(e);
+  fx.life = 1.0f;
+  effects_.push_back(fx);
+  collapseLand(e);
+}
+
+// A destroyed unit's own little island falls out of the sky, along with
+// anything standing on it (walkers) -- unless another building still holds
+// that land up, or it's permanent (home islands, geyser islands).
+void Sim::collapseLand(const Entity& dead) {
+  if (!dead.type || !dead.type->def || !dead.type->def->hasFlag("createsisland")) return;
+  int fx = footX(dead.type), fy = footY(dead.type);
+  auto covered = [&](int x, int y) {
+    for (auto& o : ents_) {
+      if (!o.alive || o.id == dead.id || !o.type || !o.type->def || !o.type->def->hasFlag("createsisland")) continue;
+      int ox = footX(o.type), oy = footY(o.type);
+      if (x >= int(o.x) - ox && x <= int(o.x) + 1 && y >= int(o.y) - oy && y <= int(o.y) + 1) return true;
+    }
+    return false;
+  };
+  for (int y = int(dead.y) - fy; y <= int(dead.y) + 1; ++y)
+    for (int x = int(dead.x) - fx; x <= int(dead.x) + 1; ++x) {
+      if (!world_.filled(x, y) || world_.permanent(x, y) || covered(x, y)) continue;
+      world_.set(x, y, Element::None);
+      world_.setOwner(x, y, 0);
+      for (auto& o : ents_)  // walkers standing there fall
+        if (o.alive && (o.role == Role::Golem || o.role == Role::Priest) && int(o.x) == x && int(o.y) == y)
+          o.alive = false;
+    }
 }
 
 // Cell next to a building's footprint that a walker can stand on.

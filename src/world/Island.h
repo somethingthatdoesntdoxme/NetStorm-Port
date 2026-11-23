@@ -30,7 +30,12 @@ struct TileChoice {
 class Island {
  public:
   Island(int w, int h)
-      : w_(w), h_(h), cells_(size_t(w) * h, Element::None), owners_(size_t(w) * h, 0), bridges_(size_t(w) * h, 0) {}
+      : w_(w),
+        h_(h),
+        cells_(size_t(w) * h, Element::None),
+        owners_(size_t(w) * h, 0),
+        bridges_(size_t(w) * h, 0),
+        permanent_(size_t(w) * h, 0) {}
 
   int width() const { return w_; }
   int height() const { return h_; }
@@ -46,6 +51,18 @@ class Island {
   }
   void setOwner(int x, int y, int o) {
     if (x >= 0 && y >= 0 && x < w_ && y < h_) owners_[size_t(y) * w_ + x] = uint8_t(o);
+  }
+
+  // Permanent land (home islands, island pieces) never falls; land grown by
+  // units does when its unit is destroyed.
+  bool permanent(int x, int y) const {
+    return (x < 0 || y < 0 || x >= w_ || y >= h_) ? false : permanent_[size_t(y) * w_ + x] != 0;
+  }
+  void setPermanent(int x, int y, bool p) {
+    if (x >= 0 && y >= 0 && x < w_ && y < h_) permanent_[size_t(y) * w_ + x] = p;
+  }
+  void markAllPermanent() {
+    for (size_t i = 0; i < cells_.size(); ++i) permanent_[i] = cells_[i] != Element::None;
   }
 
   // Bridges: 0 = none, otherwise owner (1..8) or 9 = neutral.
@@ -78,6 +95,7 @@ class Island {
   std::vector<Element> cells_;
   std::vector<uint8_t> owners_;
   std::vector<uint8_t> bridges_;
+  std::vector<uint8_t> permanent_;
 };
 
 // Simple generator for test scenes: an organic blob of the given element.

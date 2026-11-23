@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
   int autobuild = 0;
   double simulate = 0;
   bool demo = false;
+  bool aiBoth = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -36,6 +37,7 @@ int main(int argc, char** argv) {
     else if (a == "--autobuild") autobuild = std::atoi(next().c_str());
     else if (a == "--simulate") simulate = std::atof(next().c_str());
     else if (a == "--demo") demo = true;
+    else if (a == "--ai-both") aiBoth = true;
     else if (a == "--screenshot") shot = next();
     else if (a == "--size") {
       std::string s = next();
@@ -73,6 +75,7 @@ int main(int argc, char** argv) {
   if (!mission.empty() && !world.loadMissionByName(mission))
     std::fprintf(stderr, "mission '%s' not found\n", mission.c_str());
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
+  if (aiBoth) world.setAiForMe(true);
   if (demo) std::printf("demo: started building %s\n", world.demoProduction().c_str());
   if (simulate > 0) {
     float before = world.sim() ? world.sim()->player(world.player()).power : 0;
@@ -88,6 +91,25 @@ int main(int argc, char** argv) {
               dropped = world.sim()->dropUnit(world.player(), 0, x, y);
         std::printf("dropped ready unit: %s\n", dropped ? "yes" : "no");
       }
+      int counts[9] = {0};
+      for (auto& e : world.sim()->entities())
+        if (e.alive && e.owner > 0 && e.owner <= 8) counts[e.owner]++;
+      std::printf("alive entities per player:");
+      for (int i = 1; i <= 8; ++i)
+        if (counts[i]) std::printf(" p%d=%d", i, counts[i]);
+      for (int i = 1; i <= 8; ++i)
+        if (counts[i])
+          std::printf("\n  p%d power=%.0f delivered=%d ready=%zu", i, world.sim()->player(i).power,
+                      world.sim()->player(i).delivered, world.sim()->player(i).ready.size());
+      int shooters = 0, firing = 0;
+      for (auto& e : world.sim()->entities())
+        if (e.alive && e.role == ns::Role::Shooter) {
+          ++shooters;
+          int need = int(e.type->def->num("minUsage", 0));
+          if (world.sim()->energyAt(e.owner, e.type->def->str("theme"), int(e.x), int(e.y)) >= need) ++firing;
+        }
+      std::printf("\n  shooters=%d powered=%d", shooters, firing);
+      std::printf("  winner=%d  shots in flight=%zu\n", world.sim()->winner(), world.sim()->projectiles().size());
       std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d, units ready %zu\n",
                   simulate, world.player(), before, p.power, p.delivered, p.ready.size());
     }

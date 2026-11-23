@@ -1,6 +1,7 @@
 #include "app/WorldView.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 
@@ -87,16 +88,20 @@ bool WorldView::loadMission(int index) {
 // of golems at every temple.
 void WorldView::startSim(float startPower) {
   selectedWorkshop_ = dropIndex_ = -1;
+  ais_.clear();
+  std::array<bool, 9> present{};
+  for (auto& e : sim_->entities())
+    if (e.owner > 0 && e.owner <= 8) present[size_t(e.owner)] = true;
+  for (int p = 1; p <= 8; ++p)
+    if (present[size_t(p)]) ais_.emplace_back(p, uint32_t(1000 + p * 77 + seed_));
   for (int p = 0; p <= 8; ++p) sim_->player(p).power = startPower;
   const TypeInfo* golem = gd_.registry.byName("sunWalker");
   if (!golem) return;
-  std::vector<Entity> temples;
+  std::vector<std::pair<int, int>> temples;  // id, owner
   for (auto& e : sim_->entities())
-    if (e.role == Role::Temple && e.owner > 0) temples.push_back(e);
-  for (auto& t : temples) {
-    int fx = std::max(1, int(t.type->def->num("foot_x", 1)));
-    for (int k = 0; k < 2; ++k) sim_->spawn(golem, t.owner, t.x - fx / 2 + k + 0.5f, t.y + 1.5f);
-  }
+    if (e.role == Role::Temple && e.owner > 0) temples.push_back({e.id, e.owner});
+  for (auto [id, owner] : temples)
+    for (int k = 0; k < 2; ++k) sim_->spawnWalkerNear(golem, owner, id);
 }
 void WorldView::buildTestScene(uint32_t seed) {
   // One world grid with four blob islands stamped in (same layout as before).
@@ -114,6 +119,7 @@ void WorldView::buildTestScene(uint32_t seed) {
           world.setOwner(pos[i][0] + x, pos[i][1] + y, owners[i]);
         }
   }
+  world.markAllPermanent();
   islands_.push_back(std::move(world));
   sim_ = std::make_unique<Sim>(gd_, islands_[0]);
   player_ = 1;
@@ -144,7 +150,8 @@ void WorldView::buildTestScene(uint32_t seed) {
   add("sunFactory", 3, 4, 3);
   add("sunArcher", 3, 13, 10);
   add("sunCannon", 3, 5, 11);
-  add("windBattery", 3, 12, 4);
+  add("sunBattery", 3, 12, 4);
+  add("rainVortex", 3, 14, 9);
   startSim(3000);
   frame(0, 0, float(world.width() * kCellW), float(world.height() * kCellH + 40));
 }
@@ -160,6 +167,11 @@ void WorldView::handle(const SDL_Event& e) {
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: queue_.rotate(); break;
         case SDLK_b: autoBuild(1); break;  // let the AI place one piece
+        case SDLK_i:
+          aiForMe_ = !aiForMe_;
+          message_ = aiForMe_ ? "AI IS PLAYING FOR YOU" : "YOU HAVE CONTROL";
+          messageTime_ = time_;
+          break;
         case SDLK_n:
           sceneName_ = "test layout";
           missionIdx_ = -1;
@@ -250,6 +262,8 @@ void WorldView::update(double dt) {
     simAcc_ += std::min(dt, 0.25);
     while (simAcc_ >= Sim::kDt) {
       sim_->step();
+      for (auto& ai : ais_)
+        if (ai.player() != player_ || aiForMe_) ai.step(*sim_, islands_[0]);
       simAcc_ -= Sim::kDt;
     }
   }
@@ -595,6 +609,56 @@ void WorldView::drawHud() {
   }
 }
 
+void WorldView::drawCombat() {
+  if (!sim_) return;
+  SDL_Renderer* ren = r_.sdl();
+  for (auto& p : sim_->projectiles()) {
+    float t = std::min(1.0f, p.t / p.dur);
+    float cx = p.x0 + (p.x1 - p.x0) * t, cy = p.y0 + (p.y1 - p.y0) * t;
+    float lift = p.arc ? std::sin(t * 3.14159f) * 4.0f : 0.6f;  // cells
+    float wx = cx * kCellW, wy = (cy - lift) * kCellH;
+    bool drawn = false;
+    if (p.missile && p.missile->set >= 0 && p.missile->imageFrames > 0) {
+      // Orientation frames: pick by flight angle.
+      int n = std::max(1, p.missile->imageFrames);
+      float ang = std::atan2(p.y1 - p.y0, p.x1 - p.x0);
+      int f = int(std::lround((ang + 3.14159f) / (2 * 3.14159f) * n)) % n;
+      const SpriteTex& st = cache_.get(p.missile->set, f);
+      if (st.tex && st.w < 60) {
+        blit(st, wx, wy);
+        drawn = true;
+      }
+    }
+    if (!drawn) {
+      SDL_Color c = p.theme == "sun" ? SDL_Color{255, 230, 120, 255}
+                    : p.theme == "rain" ? SDL_Color{140, 200, 255, 255}
+                    : p.theme == "wind" ? SDL_Color{220, 255, 200, 255}
+                                        : SDL_Color{255, 140, 255, 255};
+      SDL_FRect d = cam_.toScreen(wx - 2, wy - 2, 4, 4);
+      SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
+      SDL_RenderFillRectF(ren, &d);
+    }
+  }
+  for (auto& fx : sim_->effects()) {
+    if (!fx.type || fx.type->set < 0) continue;
+    // Animation lines, skipping help/info pictures.
+    std::vector<int> lines;
+    if (fx.type->def)
+      for (size_t i = 0; i < fx.type->def->frames.size() && int(i) < fx.type->imageFrames; ++i) {
+        const auto& l = fx.type->def->frames[i].label;
+        if (l.find("help") == std::string::npos && l.find("info") == std::string::npos) lines.push_back(int(i));
+      }
+    if (lines.empty()) continue;
+    int f = lines[size_t(std::min(int(lines.size()) - 1, int(fx.t / fx.life * float(lines.size()))))];
+    blit(cache_.get(fx.type->set, f), fx.x * kCellW, fx.y * kCellH);
+  }
+  if (sim_->winner()) {
+    std::string msg = sim_->winner() == player_ ? "VICTORY" : "PLAYER " + std::to_string(sim_->winner()) + " WINS";
+    float w = float(msg.size()) * 30;
+    drawText(ren, (cam_.screenW - w) / 2, cam_.screenH * 0.4f, 5, msg, SDL_Color{255, 220, 110, 255});
+  }
+}
+
 void WorldView::drawObjects() {
   struct Item {
     float y;
@@ -665,8 +729,23 @@ void WorldView::drawObjects() {
     anchorOf(o, wx, wy);
     int base = baseFor(o);
     int anim = frameFor(o);
-    if (base >= 0) blit(cache_.get(o.type->set, o.type->frame(base)), wx, wy);
-    if (anim != base) blit(cache_.get(o.type->set, o.type->frame(anim)), wx, wy);
+    auto drawFrame = [&](int line) {
+      const SpriteTex& st = cache_.get(o.type->set, o.type->frame(line));
+      if (o.flash > 0 && st.tex) SDL_SetTextureColorMod(st.tex, 255, 120, 110);
+      blit(st, wx, wy);
+      if (o.flash > 0 && st.tex) SDL_SetTextureColorMod(st.tex, 255, 255, 255);
+    };
+    if (base >= 0) drawFrame(base);
+    if (anim != base) drawFrame(anim);
+    // Health bar when damaged.
+    if (o.hp < o.maxHp && o.maxHp > 0) {
+      float w = 20, f = std::max(0.0f, float(o.hp) / float(o.maxHp));
+      SDL_FRect bg = cam_.toScreen(wx - 16, wy + 2, w, 2), fg = cam_.toScreen(wx - 16, wy + 2, w * f, 2);
+      SDL_SetRenderDrawColor(r_.sdl(), 30, 0, 0, 220);
+      SDL_RenderFillRectF(r_.sdl(), &bg);
+      SDL_SetRenderDrawColor(r_.sdl(), f > 0.5f ? 80 : 255, f > 0.5f ? 220 : 160, 60, 255);
+      SDL_RenderFillRectF(r_.sdl(), &fg);
+    }
     // A golem carrying a crystal shows a little gold marker.
     if (o.role == Role::Golem && o.carrying) {
       SDL_FRect d = cam_.toScreen(wx - 2, wy - 16, 4, 4);
@@ -680,6 +759,7 @@ void WorldView::draw() {
   drawSky();
   for (auto& isl : islands_) drawIsland(isl);
   drawObjects();
+  drawCombat();
   if (dropIndex_ < 0) drawBuildUi();
   drawHud();
   char t[256];

@@ -57,6 +57,12 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
       fy = std::max(1, int(t->def->num("foot_y", 1)));
     }
   };
+  std::vector<uint8_t> unitGrown(size_t(kWorld) * kWorld, 0);  // land grown by (destroyable) units
+  auto markGrown = [&](int x0, int y0, int x1, int y1) {
+    for (int y = std::max(0, y0); y <= std::min(kWorld - 1, y1); ++y)
+      for (int x = std::max(0, x0); x <= std::min(kWorld - 1, x1); ++x)
+        if (!land.filled(x, y)) unitGrown[size_t(y) * kWorld + x] = 1;
+  };
   auto fillRect = [&](int x0, int y0, int x1, int y1, Element e, int owner) {
     for (int y = y0; y <= y1; ++y)
       for (int x = x0; x <= x1; ++x) {
@@ -89,6 +95,7 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     } else if (t->def->hasFlag("createsisland")) {
       Element e = elementFromName(o.type);
       if (e == Element::None) e = Element::Sun;
+      if (ln != "geyser") markGrown(ax - fx, ay - fy, ax + 1, ay + 1);
       fillRect(ax - fx, ay - fy, ax + 1, ay + 1, e, owner);  // footprint + 1 cell apron
     }
     // Islands themselves are drawn as terrain, not as sprites.
@@ -196,6 +203,9 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     }
   }
   land.tidy();
+  for (int y = 0; y < kWorld; ++y)
+    for (int x = 0; x < kWorld; ++x)
+      land.setPermanent(x, y, land.filled(x, y) && !unitGrown[size_t(y) * kWorld + x]);
 
   // Final bounds.
   out.minX = out.minY = kWorld;

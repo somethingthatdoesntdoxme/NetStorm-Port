@@ -9,6 +9,7 @@
 #include "world/Mission.h"
 #include "game/BridgePieces.h"
 #include "game/Sim.h"
+#include "game/Ai.h"
 
 #include <memory>
 
@@ -38,6 +39,7 @@ class WorldView {
   // Test hook: open the first own workshop and start building its first affordable unit.
   std::string demoProduction();
   Sim* sim() { return sim_.get(); }
+  void setAiForMe(bool b) { aiForMe_ = b; }
   int player() const { return player_; }  // let the bridge AI play `pieces` pieces for the player
   const std::vector<std::string>& missions() const { return missions_; }
 
@@ -61,6 +63,9 @@ class WorldView {
   Camera cam_;
   std::vector<Island> islands_;
   std::unique_ptr<Sim> sim_;
+  std::vector<SkirmishAi> ais_;
+  bool aiForMe_ = false;  // I: let the AI play your side too
+  void drawCombat();
   double simAcc_ = 0;
   int selectedWorkshop_ = -1;  // production menu open for this workshop
   int dropIndex_ = -1;         // placing this ready unit

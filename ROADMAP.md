@@ -36,10 +36,14 @@ Deterministic fixed-tick simulation (needed for lockstep netplay).
 - [x] Workshops build units for Storm Power, energy check by fury, drop finished units into open sky
 - [ ] Exact build times, energy radius/falloff, golem/priest construction (temples, workshops, altars)
 - [ ] Production slots per workshop level, tech levels / sacrifices / altar
-- [ ] Shooters, barricades, missiles and arcs, damage, hp, destruction, falling islands
+- [x] Shooters fire (range, hpPerSec, delayBetweenShots), need fury energy, missiles + cannon arcs
+- [x] Blockers stop direct fire, cannons break enemy bridges, destruction + explosions
+- [x] Unit islands fall when their unit dies (home/geyser islands are permanent); walkers on them fall
+- [ ] Air units/anti-air (airrange/airdamage), fences, meltdown, exact damage model
 - [ ] Flyers, balloons, walkers, vortices, spells (bombs: twister, meteor, graviton...)
 - [ ] Wind/rain/thunder/sun element rules
-- [ ] Win conditions: capture + sacrifice the enemy priest
+- [x] Interim win condition: last player with buildings
+- [ ] Real win condition: capture + sacrifice the enemy priest
 Method: stats come straight from the `.type` scripts; behaviour is matched by
 reading the decompiled engine (`tools/re`) and A/B testing against the original.
 
@@ -56,6 +60,7 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - [ ] 2–8 players, teams, AI fill-ins, spectators, replays (free with lockstep)
 
 ## M5 — AI + single player (≈3 weeks)
+- [x] Skirmish AI v1: purposeful bridging, generators at the front, production, unit drops (I = AI plays for you, --ai-both)
 - [ ] Port the skirmish AI behaviour (5 difficulties in 10.82)
 - [ ] Tutorials + campaign missions from the `.fort`/`.english` scripts
 

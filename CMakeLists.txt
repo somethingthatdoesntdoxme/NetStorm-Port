@@ -29,6 +29,7 @@ add_library(nscore STATIC
   src/game/BridgePieces.cpp
   src/game/Sim.cpp
   src/game/Ai.cpp
+  src/game/MissionScript.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)

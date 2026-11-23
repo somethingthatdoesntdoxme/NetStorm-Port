@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
   std::string dataDir = ".", shot, mission, campaign, menuShot;
   int startSet = -1, autobuild = 0;
   double simulate = 0;
-  bool demo = false, aiBoth = false, sprites = false;
+  bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
     else if (a == "--autobuild") autobuild = std::atoi(next().c_str());
     else if (a == "--simulate") simulate = std::atof(next().c_str());
     else if (a == "--demo") demo = true;
+    else if (a == "--stop-at-note") stopAtNote = true;
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
       std::string s = next();
@@ -160,6 +161,15 @@ int main(int argc, char** argv) {
         std::printf("game over after %.0fs: %s\n", t, world.outcome() > 0 ? "WON" : "LOST");
         break;
       }
+      // Headless runs: click the first button on any scripted note.
+      SDL_Event k{};
+      k.type = SDL_KEYDOWN;
+      k.key.keysym.sym = SDLK_RETURN;  // picks the harmless option
+      if (stopAtNote && world.hasDialog()) break;
+      while (world.hasDialog()) {
+        std::printf("  [%5.0fs] note: %s\n", world.sim()->time(), world.dialogSummary().c_str());
+        world.handle(k);
+      }
     }
     printStats(world, before, simulate, gd);
   }
@@ -235,7 +245,13 @@ int main(int argc, char** argv) {
       world.update(dt);
       int oc = world.outcome();
       if (oc != 0 && !currentMission.empty()) {
-        front.showResult(currentMission, oc > 0);
+        front.showResult(currentMission, oc > 0, world.resultText());
+        state = State::Menu;
+      } else if (world.restartRequested && !currentMission.empty()) {
+        startCampaign(currentMission);
+      } else if (world.abortRequested) {
+        world.abortRequested = false;
+        front.showTitle();
         state = State::Menu;
       }
     } else if (state == State::Sprites) {

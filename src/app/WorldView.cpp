@@ -51,6 +51,11 @@ bool WorldView::loadMissionByName(const std::string& part) {
 }
 
 bool WorldView::loadMission(int index) {
+  hasMission_ = false;
+  forcedOutcome_ = 0;
+  resultText_.clear();
+  dialogs_.clear();
+  abortRequested = restartRequested = false;
   if (missions_.empty()) return false;
   index = ((index % int(missions_.size())) + int(missions_.size())) % int(missions_.size());
   const Bytes* data = gd_.archive.find(missions_[index]);
@@ -104,6 +109,10 @@ void WorldView::startSim(float startPower) {
     for (int k = 0; k < 2; ++k) sim_->spawnWalkerNear(golem, owner, id);
 }
 void WorldView::buildTestScene(uint32_t seed) {
+  hasMission_ = false;
+  forcedOutcome_ = 0;
+  resultText_.clear();
+  dialogs_.clear();
   // One world grid with four blob islands stamped in (same layout as before).
   islands_.clear();
   Island world(100, 76);
@@ -157,6 +166,7 @@ void WorldView::buildTestScene(uint32_t seed) {
   frame(0, 0, float(world.width() * kCellW), float(world.height() * kCellH + 40));
 }
 void WorldView::handle(const SDL_Event& e) {
+  if (handleDialog(e)) return;
   switch (e.type) {
     case SDL_QUIT: quit_ = true; break;
     case SDL_KEYDOWN:
@@ -300,13 +310,27 @@ void WorldView::handle(const SDL_Event& e) {
 
 void WorldView::update(double dt) {
   time_ += dt;
-  if (sim_ && !paused) {
+  if (sim_ && !paused && dialogs_.empty() && forcedOutcome_ == 0) {
     simAcc_ += std::min(dt, 0.25) * speed;
     while (simAcc_ >= Sim::kDt) {
       sim_->step();
       for (auto& ai : ais_)
         if (ai.player() != player_ || aiForMe_) ai.step(*sim_, islands_[0]);
       simAcc_ -= Sim::kDt;
+      if (hasMission_) {
+        for (auto& ev : script_.step(*sim_)) {
+          if (ev.outcome != 0) {
+            forcedOutcome_ = ev.outcome;
+            resultText_ = ev.section->text;
+          } else {
+            openSection(ev.section);
+          }
+        }
+        if (forcedOutcome_ || !dialogs_.empty()) {
+          simAcc_ = 0;
+          break;
+        }
+      }
     }
   }
   // Keyboard / Steam Deck d-pad panning.
@@ -430,6 +454,9 @@ bool WorldView::startMission(const MissionInfo& info) {
     for (int k = have; k < std::min(mp.collectors, 6) && temple >= 0 && golem; ++k)
       sim_->spawnWalkerNear(golem, p, temple);
   }
+  mission_ = info;
+  hasMission_ = true;
+  script_.reset(&mission_, *sim_, player_);
   return true;
 }
 
@@ -977,12 +1004,124 @@ void WorldView::draw() {
   drawCombat();
   if (dropIndex_ < 0) drawBuildUi();
   drawHud();
+  drawDialog();
   char t[256];
   std::snprintf(t, sizeof t,
                 "NetStorm Port - %s  zoom %.2fx  [M/[ ] missions, N test layout, wheel zoom, drag pan, G grid, "
                 "Tab sprites]",
                 sceneName_.c_str(), cam_.zoom);
   SDL_SetWindowTitle(r_.window(), t);
+}
+
+
+// ---- Scripted notes (the Marquis' taunts etc.) --------------------------
+
+// The section's buttons, plus "Ignore" when none of them just closes the note
+// (the original's note window had a close box).
+static std::vector<ScriptButton> noteButtons(const ScriptSection& sec) {
+  std::vector<ScriptButton> b = sec.buttons;
+  bool harmless = false;
+  for (auto& x : b) harmless |= x.action == "donothing" || x.action == "showtechnology";
+  if (!harmless) b.push_back({"Ignore", "donothing", ""});
+  return b;
+}
+static int safeChoice(const std::vector<ScriptButton>& b) {
+  for (size_t i = 0; i < b.size(); ++i)
+    if (b[i].action == "donothing") return int(i);
+  return 0;
+}
+
+void WorldView::openSection(const ScriptSection* sec) {
+  if (sec) dialogs_.push_back(sec);
+}
+
+bool WorldView::handleDialog(const SDL_Event& e) {
+  if (dialogs_.empty()) return false;
+  if (e.type == SDL_MOUSEMOTION) {
+    dialogHover_ = -1;
+    for (size_t i = 0; i < dialogButtons_.size(); ++i) {
+      auto& r = dialogButtons_[i];
+      if (e.motion.x >= r.x && e.motion.x <= r.x + r.w && e.motion.y >= r.y && e.motion.y <= r.y + r.h)
+        dialogHover_ = int(i);
+    }
+    return false;  // still allow hover/camera updates
+  }
+  int pick = -1;
+  if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
+    for (size_t i = 0; i < dialogButtons_.size(); ++i) {
+      auto& r = dialogButtons_[i];
+      if (e.button.x >= r.x && e.button.x <= r.x + r.w && e.button.y >= r.y && e.button.y <= r.y + r.h)
+        pick = int(i);
+    }
+  } else if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_SPACE ||
+                                       e.key.keysym.sym == SDLK_ESCAPE)) {
+    pick = safeChoice(noteButtons(*dialogs_.front()));
+  } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
+    pick = e.key.keysym.sym - SDLK_1;
+  } else if (e.type == SDL_CONTROLLERBUTTONDOWN && e.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
+    pick = dialogHover_ >= 0 ? dialogHover_ : safeChoice(noteButtons(*dialogs_.front()));
+  }
+  if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_KEYDOWN) {
+    if (pick < 0) return true;  // modal: swallow other clicks/keys
+  } else if (pick < 0) {
+    return false;
+  }
+  const ScriptSection* sec = dialogs_.front();
+  auto btns = noteButtons(*sec);
+  if (pick >= int(btns.size())) return true;
+  dialogs_.erase(dialogs_.begin());
+  dialogHover_ = -1;
+  const ScriptButton b = btns[size_t(pick)];
+  if (b.action == "tell") {
+    if (const ScriptSection* t = mission_.section(b.arg)) dialogs_.insert(dialogs_.begin(), t);
+  } else if (b.action == "leavebattle") {
+    forcedOutcome_ = -1;  // e.g. "Depart in Disgrace" after surrendering
+  } else if (b.action == "missionabort") {
+    abortRequested = true;
+  } else if (b.action == "missionrestart") {
+    restartRequested = true;
+  }
+  // donothing, showtechnology, missionbegin (only on result screens): just close.
+  return true;
+}
+
+void WorldView::drawDialog() {
+  dialogButtons_.clear();
+  if (dialogs_.empty()) return;
+  SDL_Renderer* ren = r_.sdl();
+  int sw, sh;
+  r_.outputSize(sw, sh);
+  const ScriptSection* sec = dialogs_.front();
+  float w = std::min(900.0f, sw - 60.0f), scale = 2.5f;
+  float textH = drawWrapped(ren, 0, 0, w - 60, scale, sec->text, {}, 1e9f, true);
+  auto btns = noteButtons(*sec);
+  size_t nb = btns.size();
+  float bh = 44, h = textH + 60 + float(nb) * (bh + 8);
+  float x = (sw - w) / 2, y = std::max(20.0f, (sh - h) / 2);
+  SDL_SetRenderDrawColor(ren, 0, 0, 0, 110);
+  SDL_FRect all{0, 0, float(sw), float(sh)};
+  SDL_RenderFillRectF(ren, &all);
+  SDL_FRect box{x, y, w, h};
+  SDL_SetRenderDrawColor(ren, 24, 22, 36, 240);
+  SDL_RenderFillRectF(ren, &box);
+  SDL_SetRenderDrawColor(ren, 190, 160, 100, 255);
+  SDL_RenderDrawRectF(ren, &box);
+  drawWrapped(ren, x + 30, y + 26, w - 60, scale, sec->text, {235, 235, 235, 255}, float(sh));
+  float by = y + textH + 40;
+  for (size_t i = 0; i < nb; ++i) {
+    std::string label = btns[i].label;
+    for (auto& c : label) c = char(std::toupper(static_cast<unsigned char>(c)));
+    SDL_FRect r{x + 30, by, w - 60, bh};
+    bool hot = int(i) == dialogHover_;
+    SDL_SetRenderDrawColor(ren, hot ? 60 : 34, hot ? 50 : 32, hot ? 30 : 48, 255);
+    SDL_RenderFillRectF(ren, &r);
+    SDL_SetRenderDrawColor(ren, 190, 160, 100, 255);
+    SDL_RenderDrawRectF(ren, &r);
+    std::string t = std::to_string(i + 1) + ". " + label;
+    drawText(ren, r.x + 16, r.y + (bh - 21) / 2, 3, t, hot ? SDL_Color{255, 220, 110, 255} : SDL_Color{235, 235, 235, 255});
+    dialogButtons_.push_back(r);
+    by += bh + 8;
+  }
 }
 
 }  // namespace ns

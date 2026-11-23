@@ -32,6 +32,13 @@ inline const uint8_t* tinyGlyph(char c) {
       {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}, {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10},  // - /
       {0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02}, {0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08},  // ( )
       {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00}, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // + space
+      {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}, {0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08},  // ! ,
+      {0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00}, {0x0A, 0x0A, 0x14, 0x00, 0x00, 0x00, 0x00},  // ' "
+      {0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04}, {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x04, 0x08},  // ? ;
+      {0x00, 0x15, 0x0E, 0x1F, 0x0E, 0x15, 0x00}, {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03},  // * %
+      {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08}, {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02},  // > <
+      {0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00}, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F},  // = _
+      {0x0C, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0D}, {0x0A, 0x1F, 0x0A, 0x0A, 0x1F, 0x0A, 0x00},  // & #
   };
   c = char(std::toupper(static_cast<unsigned char>(c)));
   if (c >= '0' && c <= '9') return font[c - '0'];
@@ -44,6 +51,20 @@ inline const uint8_t* tinyGlyph(char c) {
     case '(': return font[40];
     case ')': return font[41];
     case '+': return font[42];
+    case '!': return font[44];
+    case ',': return font[45];
+    case '\'': case '`': return font[46];
+    case '"': return font[47];
+    case '?': return font[48];
+    case ';': return font[49];
+    case '*': return font[50];
+    case '%': return font[51];
+    case '>': return font[52];
+    case '<': return font[53];
+    case '=': return font[54];
+    case '_': return font[55];
+    case '&': return font[56];
+    case '#': return font[57];
     default: return font[43];
   }
 }
@@ -69,4 +90,47 @@ inline float drawText(SDL_Renderer* r, float x, float y, float scale, const std:
   return float(s.size()) * 6 * scale;
 }
 
+
+// Word-wrapped text; blank lines ("\n\n") separate paragraphs. Returns the y after the last line.
+inline float drawWrapped(SDL_Renderer* ren, float x, float y, float w, float scale, const std::string& text,
+                         SDL_Color c, float maxY, bool measureOnly = false) {
+  float cw = 6 * scale, lh = 10 * scale;
+  size_t perLine = w / cw > 10 ? size_t(w / cw) : 10;
+  std::string para;
+  auto flush = [&]() {
+    std::string line, word;
+    auto emit = [&]() {
+      if (!measureOnly && y < maxY) drawText(ren, x, y, scale, line, c);
+      y += lh;
+      line.clear();
+    };
+    for (size_t i = 0; i <= para.size(); ++i) {
+      char ch = i < para.size() ? para[i] : ' ';
+      if (ch == '\n') ch = ' ';
+      if (ch == ' ') {
+        if (line.size() + word.size() + 1 > perLine && !line.empty()) emit();
+        if (!word.empty()) line += (line.empty() ? "" : " ") + word;
+        word.clear();
+      } else {
+        word += ch;
+      }
+    }
+    if (!line.empty()) emit();
+    para.clear();
+  };
+  size_t s0 = text.find_first_not_of(" \n");
+  for (size_t i = s0 == std::string::npos ? text.size() : s0; i < text.size(); ++i) {
+    if (text[i] == '\n' && i + 1 < text.size() && text[i + 1] == '\n') {
+      flush();
+      y += lh * 0.6f;
+      while (i + 1 < text.size() && text[i + 1] == '\n') ++i;
+    } else {
+      para += text[i];
+    }
+  }
+  flush();
+  return y;
+}
+
 }  // namespace ns
+

@@ -86,8 +86,9 @@ void Frontend::markDone(const std::string& id) {
   saveProgress();
 }
 
-void Frontend::showResult(const std::string& id, bool won) {
+void Frontend::showResult(const std::string& id, bool won, const std::string& text) {
   current_ = id;
+  resultText_ = text;
   lastWon_ = won;
   if (won) markDone(id);
   navigate("result");
@@ -265,43 +266,8 @@ void Frontend::drawBackground(bool dim) {
   }
 }
 
-// Word-wrapped text (the HUD font is upper-case only for now).
 void Frontend::drawPanelText(float x, float y, float w, float scale, const std::string& text, SDL_Color c, float maxY) {
-  SDL_Renderer* ren = r_.sdl();
-  float cw = 6 * scale, lh = 10 * scale;
-  size_t perLine = std::max<size_t>(10, size_t(w / cw));
-  std::string para;
-  auto flush = [&]() {
-    std::string line, word;
-    auto emit = [&]() {
-      if (y < maxY) drawText(ren, x, y, scale, line, c);
-      y += lh;
-      line.clear();
-    };
-    for (size_t i = 0; i <= para.size(); ++i) {
-      char ch = i < para.size() ? para[i] : ' ';
-      if (ch == '\n') ch = ' ';
-      if (ch == ' ') {
-        if (line.size() + word.size() + 1 > perLine && !line.empty()) emit();
-        if (!word.empty()) line += (line.empty() ? "" : " ") + word;
-        word.clear();
-      } else {
-        word += ch;
-      }
-    }
-    if (!line.empty()) emit();
-    para.clear();
-  };
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (text[i] == '\n' && i + 1 < text.size() && text[i + 1] == '\n') {
-      flush();
-      y += lh * 0.6f;
-      ++i;
-    } else {
-      para += text[i];
-    }
-  }
-  flush();
+  drawWrapped(r_.sdl(), x, y, w, scale, text, c, maxY);
 }
 
 void Frontend::draw() {
@@ -323,6 +289,7 @@ void Frontend::draw() {
       std::string head = screen_ == Screen::Result ? (lastWon_ ? "SUCCESS!" : "FAILURE!") : upper(m->title);
       drawText(ren, x, 50, 5, head, screen_ == Screen::Result ? (lastWon_ ? kGreen : SDL_Color{255, 90, 80, 255}) : kGold);
       std::string body = screen_ == Screen::Briefing ? m->briefing : (lastWon_ ? m->success : m->failure);
+      if (screen_ == Screen::Result && !resultText_.empty()) body = resultText_;
       // Drop a repeated title line at the top of the text.
       auto nl = body.find('\n');
       if (nl != std::string::npos && upper(body.substr(0, nl)) == upper(m->title)) body = body.substr(nl);

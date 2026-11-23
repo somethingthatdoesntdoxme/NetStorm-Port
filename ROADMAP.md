@@ -85,4 +85,5 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Title screen using the install's own title art, campaign chapters, Easy/Normal/Hard, mission list following the original "Next Mission" chain (all 16 missions), briefings, success/failure screens with Next/Retry.
 - Progress saved to the user pref dir (progress.txt); completed missions marked with *.
 - ESC in game opens pause menu (Resume / Restart / Quit to menu). Mission HUD shows title + players in their colours.
-- Missing: tutorials (no forts), scripted in-mission events (surrender/notes dialogs), tech unlocks via sacrifice.
+- Scripted events: timed notes ([@N]), AI priest captured/dead/saved, AI temple half/dead, [Failed]/[Succeeded] combos end the mission with their own text. Notes are modal popups with the original buttons (Tell chains, LeaveBattle = surrender/defeat, MissionAbort, MissionRestart); notes with no harmless button get an Ignore option. Enter/Esc/A = harmless choice, 1-9 picks.
+- Missing: tutorials (no forts), tech unlocks via sacrifice.

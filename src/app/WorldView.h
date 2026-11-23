@@ -11,6 +11,7 @@
 #include "game/BridgePieces.h"
 #include "game/Sim.h"
 #include "game/Ai.h"
+#include "game/MissionScript.h"
 
 #include <array>
 #include <memory>
@@ -40,7 +41,17 @@ class WorldView {
   // Campaign: load the mission's map and apply its settings (you = player 1).
   bool startMission(const MissionInfo& info);
   // +1 won, -1 lost, 0 playing.
-  int outcome() const { return sim_ ? sim_->outcome(player_) : 0; }
+  int outcome() const { return forcedOutcome_ ? forcedOutcome_ : sim_ ? sim_->outcome(player_) : 0; }
+  // Text for the results screen when a scripted section ended the mission ("" = default).
+  const std::string& resultText() const { return resultText_; }
+  bool hasDialog() const { return !dialogs_.empty(); }
+  std::string dialogSummary() const {
+    if (dialogs_.empty()) return "";
+    auto& s = *dialogs_.front();
+    std::string k = s.keys.empty() ? "" : s.keys[0];
+    return "[" + k + "] " + std::to_string(s.buttons.size()) + " button(s)";
+  }
+  bool abortRequested = false, restartRequested = false;  // from script buttons
   SDL_Color colourOf(int owner) const;
   bool paused = false;
   bool menuRequested = false;  // ESC with nothing selected
@@ -63,6 +74,17 @@ class WorldView {
   void anchorOf(const Entity& e, float& wx, float& wy) const;
   void startSim(float startPower);
   void drawHud();
+  void drawDialog();
+  bool handleDialog(const SDL_Event& e);
+  void openSection(const ScriptSection* s);
+  MissionInfo mission_;
+  bool hasMission_ = false;
+  MissionScript script_;
+  std::vector<const ScriptSection*> dialogs_;  // queue; front is shown, game pauses while open
+  std::vector<SDL_FRect> dialogButtons_;
+  int dialogHover_ = -1;
+  int forcedOutcome_ = 0;
+  std::string resultText_;
   bool handleUiClick(int sx, int sy);
   const Entity* entityAtScreen(int sx, int sy) const;
   void blit(const SpriteTex& st, float wx, float wy);

@@ -26,6 +26,17 @@ struct MissionPlayer {
   std::string colour;  // "purple", "orange", ...
 };
 
+struct ScriptButton {
+  std::string label, action, arg;  // action/arg lower-case, e.g. "tell","surrender"
+};
+// One [Key][Key2]... block of the script. Keys are lower-case without brackets:
+// "@120" (seconds in), "ai2priestcaptured", "aitempledead", "failed", "surrender"...
+struct ScriptSection {
+  std::vector<std::string> keys;
+  std::string text;  // plain text
+  std::vector<ScriptButton> buttons;
+};
+
 struct MissionInfo {
   std::string id;        // file base name, e.g. "rainvsraineasy"
   std::string fort;      // fort file base, e.g. "rainvsrain"
@@ -34,6 +45,8 @@ struct MissionInfo {
   std::string briefing, success, failure;  // plain text, paragraphs separated by blank lines
   std::string next;      // next mission id (lower-case) or ""
   std::array<MissionPlayer, 9> players;    // [1] = you
+  std::vector<ScriptSection> script;
+  const ScriptSection* section(const std::string& key) const;  // by any of its keys
 
   // Parses the .english text. `id` is the file base name.
   static MissionInfo parse(const std::string& text, const std::string& id);

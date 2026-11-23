@@ -35,10 +35,21 @@ std::vector<std::string> split(const std::string& s, char sep) {
 }
 }  // namespace
 
+const ScriptSection* MissionInfo::section(const std::string& key) const {
+  for (auto& s : script)
+    for (auto& k : s.keys)
+      if (k == key) return &s;
+  return nullptr;
+}
+
 std::string missionTextToPlain(const std::string& html) {
   std::string out;
   for (size_t i = 0; i < html.size(); ++i) {
     char c = html[i];
+    if (c == '~' && i + 1 < html.size()) {  // ~X colour/style codes
+      ++i;
+      continue;
+    }
     if (c == '<') {
       size_t e = html.find('>', i);
       if (e == std::string::npos) break;
@@ -93,13 +104,48 @@ MissionInfo MissionInfo::parse(const std::string& text, const std::string& id) {
   std::string cur = "header";
   std::istringstream is(text);
   std::string line;
+  std::vector<std::pair<std::vector<std::string>, std::string>> raw;
   while (std::getline(is, line)) {
     std::string t = trim(line);
     if (!t.empty() && t[0] == '[' && t.find(']') != std::string::npos) {
       cur = lower(t.substr(1, t.find(']') - 1));
+      std::vector<std::string> keys;
+      for (size_t a = 0; a < t.size() && t[a] == '[';) {
+        size_t b = t.find(']', a);
+        if (b == std::string::npos) break;
+        keys.push_back(lower(trim(t.substr(a + 1, b - a - 1))));
+        a = b + 1;
+      }
+      raw.push_back({keys, ""});
       continue;
     }
     sections[cur] += line + "\n";
+    if (!raw.empty()) raw.back().second += line + "\n";
+  }
+  MissionInfo m0;
+  for (auto& [keys, txt] : raw) {
+    if (keys.empty() || keys[0].empty() || keys[0][0] == '*' || keys[0] == "header" || keys[0] == "end") continue;
+    ScriptSection sec;
+    sec.keys = keys;
+    std::string kept;
+    std::istringstream ss(txt);
+    std::string l;
+    while (std::getline(ss, l)) {
+      std::string t = trim(l);
+      if (t.rfind("$Button=", 0) == 0) {
+        auto parts = split(t.substr(8), ',');
+        ScriptButton b;
+        b.label = parts.size() > 0 ? trim(parts[0]) : "OK";
+        b.action = parts.size() > 1 ? lower(trim(parts[1])) : "donothing";
+        b.arg = parts.size() > 2 ? lower(trim(parts[2])) : "";
+        sec.buttons.push_back(b);
+        continue;
+      }
+      if (!t.empty() && (t[0] == '$' || t.rfind("<$", 0) == 0)) continue;
+      kept += l + "\n";
+    }
+    sec.text = missionTextToPlain(kept);
+    m0.script.push_back(std::move(sec));
   }
 
   // Header key = value lines.
@@ -157,6 +203,7 @@ MissionInfo MissionInfo::parse(const std::string& text, const std::string& id) {
     }
     return missionTextToPlain(kept);
   };
+  m.script = std::move(m0.script);
   m.briefing = body(findSection("a."));
   // Success text, following "Tell" hops (e.g. Succeeded -> VictoryNote),
   // which is also where some missions keep their Next Mission button.

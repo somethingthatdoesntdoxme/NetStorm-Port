@@ -32,7 +32,7 @@ class Frontend {
 
   void showTitle() { navigate("title"); }
   void showPause() { navigate("pause"); }
-  void showResult(const std::string& missionId, bool won);
+  void showResult(const std::string& missionId, bool won, const std::string& text = "");
   const MissionInfo* mission(const std::string& id) const;
   void markDone(const std::string& id);
 
@@ -62,6 +62,7 @@ class Frontend {
   std::vector<Chapter> chapters_;
   std::string chapter_, difficulty_ = "", current_;
   bool lastWon_ = false;
+  std::string resultText_;
   std::set<std::string> done_;
   std::vector<Button> buttons_;
   int hover_ = -1;

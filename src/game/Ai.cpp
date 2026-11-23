@@ -106,7 +106,7 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
     if (!e.alive || e.owner != player_) continue;
     if (e.role == Role::Priest && e.chainedAt < 0 && e.carriedBy < 0) priest = &e;
     if (e.role == Role::Workshop) ++workshops;
-    if (e.role == Role::Altar) ++altars;
+    if (e.role == Role::Altar && e.built >= 1) ++altars;  // half-built ones get resumed or replaced
     if (e.role == Role::Shooter) ++shooters;
     if ((e.role == Role::Temple || e.role == Role::Workshop) && fury.empty()) fury = e.type->def->str("theme");
   }
@@ -203,7 +203,7 @@ void SkirmishAi::produce(Sim& sim) {
   // Save up for an altar once we're fighting and don't have one.
   int altars = 0, shooters = 0;
   for (auto& e : sim.entities())
-    if (e.alive && e.owner == player_) altars += e.role == Role::Altar, shooters += e.role == Role::Shooter;
+    if (e.alive && e.owner == player_) altars += e.role == Role::Altar && e.built >= 1, shooters += e.role == Role::Shooter;
   float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);

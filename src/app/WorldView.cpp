@@ -644,6 +644,15 @@ bool WorldView::handleUiClick(int sx, int sy) {
         message_ = why;
         messageTime_ = time_;
       }
+    } else if (b.action == "golem" && sim_) {
+      std::string why;
+      if (!sim_->buyGolem(player_, &why)) {
+        for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
+        message_ = why;
+      } else {
+        message_ = "A GOLEM RISES FROM THE TEMPLE";
+      }
+      messageTime_ = time_;
     } else if (b.action == "upgrade" && sim_) {
       std::string why;
       if (!sim_->upgradeWorkshop(selectedWorkshop_, &why)) {
@@ -696,6 +705,17 @@ void WorldView::drawHud() {
   SDL_Color pc = me.power < 1000 ? red : me.power < 2000 ? SDL_Color{255, 230, 60, 255} : white;
   float x = drawText(ren, 160, 21, 2, "STORM POWER ", gold);
   drawText(ren, 160 + x, 21, 2, std::to_string(int(me.power)), pc);
+  {  // Make a golem at the temple
+    bool temple = false;
+    for (auto& e : sim_->entities()) temple |= e.alive && e.owner == player_ && e.role == Role::Temple;
+    if (temple) {
+      SDL_FRect gb{490, 12, 170, 32};
+      bool can = me.power >= Sim::kGolemCost;
+      panel(gb);
+      drawText(ren, gb.x + 10, 21, 2, "+ GOLEM " + std::to_string(Sim::kGolemCost), can ? gold : grey);
+      buttons_.push_back({gb, "golem"});
+    }
+  }
 
   // Mission title and the other players, in their colours (top right).
   if (!missionTitle_.empty()) {

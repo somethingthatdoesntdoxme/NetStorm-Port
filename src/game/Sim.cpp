@@ -1,6 +1,7 @@
 #include "game/Sim.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cctype>
 #include <cmath>
 #include <deque>
@@ -103,30 +104,6 @@ void Sim::step() {
     else if (e.role == Role::Flyer) stepFlyer(ents_[i]);
   }
   stepProjectiles();
-  // Temples slowly replace lost golems (approximation: one per 30 s, up to the
-  // mission's collector count) so a player can't be starved out for good.
-  {
-    std::array<int, 9> golems{}, temple{};
-    temple.fill(-1);
-    for (auto& e : ents_) {
-      if (!e.alive || e.owner <= 0 || e.owner > 8) continue;
-      if (e.role == Role::Golem) golems[size_t(e.owner)]++;
-      if (e.role == Role::Temple && e.built >= 1) temple[size_t(e.owner)] = e.id;
-    }
-    const TypeInfo* g = gd_.registry.byName("sunWalker");
-    for (int p = 1; p <= 8 && g; ++p) {
-      PlayerState& ps = players_[size_t(p)];
-      if (temple[size_t(p)] < 0 || out_[size_t(p)] || golems[size_t(p)] >= ps.golemTarget) {
-        ps.golemTimer = 0;
-        continue;
-      }
-      ps.golemTimer += kDt;
-      if (ps.golemTimer >= 30) {
-        ps.golemTimer = 0;
-        if (spawnWalkerNear(g, p, temple[size_t(p)]) >= 0) log("P" + std::to_string(p) + "'s temple raised a new golem");
-      }
-    }
-  }
   for (auto& fx : effects_) fx.t += kDt;
   effects_.erase(std::remove_if(effects_.begin(), effects_.end(), [](const Effect& f) { return f.t >= f.life; }),
                  effects_.end());
@@ -201,14 +178,20 @@ void Sim::stepShooter(Entity& s) {
 
   bool cannon = d.str("group") == "cannon";
   bool aviary = d.str("group") == "aviary";
-  bool antiAir = d.str("group") == "archer";  // archers shoot flyers; shells and bolts can't
+  // Disc Throwers and Crossbows hit air; the Vander Tower ("anti-air") hits only air;
+  // cannon shells can't.
+  bool antiAirOnly = d.str("group") == "anti-air";
+  bool antiAir = d.str("group") == "archer" || antiAirOnly;
   float sx = centreX(s), sy = centreY(s);
   // Target: nearest enemy thing in range (keep the last target if still valid).
   Entity* best = nullptr;
   float bestD = range * range;
   for (auto& e : ents_) {
     if (!e.alive || e.owner == 0 || allied(e.owner, s.owner) || e.role == Role::Geyser) continue;
-    if ((e.role == Role::Flyer || e.air) && !antiAir && !aviary) continue;
+    bool airborne = e.role == Role::Flyer || e.air;
+    if (airborne && !antiAir && !aviary) continue;
+    if (!airborne && antiAirOnly) continue;
+    if (e.role == Role::Flyer && e.type && e.type->def->num("maxHitPoints", -1) < 0) continue;  // Dust Devils can't be hurt
     if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
     float dx = centreX(e) - sx, dy = centreY(e) - sy, d2 = dx * dx + dy * dy;
     if (e.id == s.lastTarget) d2 *= 0.8f;  // stickiness
@@ -293,6 +276,9 @@ void Sim::stepProjectiles() {
 
 void Sim::damage(Entity& e, float amount) {
   if (!e.alive) return;
+  if (e.role == Role::Flyer && e.type && e.type->def && e.type->def->num("maxHitPoints", -1) < 0) return;  // Dust Devil
+  // Cloud Floaters are practically a cloud: roughly 1 hit in 20 connects.
+  if (e.air && e.type && e.type->name == "rainBalloon" && roll() % 20 != 0) return;
   e.hp -= int(std::ceil(amount));
   e.flash = 0.15f;
   if (e.role == Role::Priest) {
@@ -311,6 +297,18 @@ void Sim::damage(Entity& e, float amount) {
 
 void Sim::kill(Entity& e) {
   e.alive = false;
+  // A dead transport drops the priest it was hauling; a destroyed altar frees its captive.
+  if (Entity* pr = find(e.carryingPriest); pr && pr->carriedBy == e.id) {
+    pr->carriedBy = -1;
+    pr->x = float(int(e.x)) + 0.5f;
+    pr->y = float(int(e.y)) + 0.5f;
+    log("P" + std::to_string(pr->owner) + " priest was dropped");
+  }
+  if (e.role == Role::Altar)
+    if (Entity* pr = find(e.captive); pr && pr->chainedAt == e.id) {
+      pr->chainedAt = -1;
+      log("P" + std::to_string(pr->owner) + " priest freed - the altar fell");
+    }
   Effect fx;
   fx.type = gd_.registry.byName(footX(e.type) >= 4 ? "bombExplodeLarge" : "bombExplodeMedium");
   fx.x = centreX(e);
@@ -642,6 +640,24 @@ bool Sim::startBuild(int workshopId, const std::string& unitType, std::string* w
   return true;
 }
 
+bool Sim::buyGolem(int player, std::string* why) {
+  auto fail = [&](const char* m) {
+    if (why) *why = m;
+    return false;
+  };
+  int temple = -1;
+  for (auto& e : ents_)
+    if (e.alive && e.owner == player && e.role == Role::Temple && e.built >= 1) temple = e.id;
+  if (temple < 0) return fail("need a temple");
+  PlayerState& p = players_[size_t(player)];
+  if (p.power < kGolemCost) return fail("not enough Storm Power");
+  const TypeInfo* g = gd_.registry.byName("sunWalker");
+  if (!g || spawnWalkerNear(g, player, temple) < 0) return fail("no room by the temple");
+  p.power -= kGolemCost;
+  log("P" + std::to_string(player) + " made a golem");
+  return true;
+}
+
 int Sim::upgradeCost(const Entity& w) const {
   return int(w.type->def->num("cost", 600) / 2) * w.workshopLevel;
 }
@@ -935,8 +951,26 @@ bool Sim::launchFlyer(Entity& av, Entity& target) {
 
 void Sim::stepFlyer(Entity& f) {
   Entity* home = find(f.home);
+  bool based = home && home->alive;
+  // With its base standing a flyer never burns out -- it flies home to refuel.
+  // Orphaned, it fights on until its fuel is gone.
   f.life -= kDt;
-  if (f.life <= 0 || !home || !home->alive) {  // burnt out, or its aviary is gone
+  if (based && f.life <= 0 && !f.reloading) f.reloading = true;
+  if (f.reloading && based) {
+    float dx = centreX(*home) - f.x, dy = centreY(*home) - f.y;
+    if (dx * dx + dy * dy < 1.5f) {
+      f.reloading = false;
+      f.life = float(f.type->def->num("lifeSpan", 60));
+    } else {
+      f.heading = std::atan2(dy, dx);
+      float sp = float(f.type->def->num("speed", 2.0)) * 4.0f;
+      f.x += std::cos(f.heading) * sp * kDt;
+      f.y += std::sin(f.heading) * sp * kDt;
+      return;
+    }
+  }
+  if (!based) f.reloading = false;
+  if (f.life <= 0 && !based) {  // out of fuel
     f.alive = false;
     Effect fx;
     fx.type = gd_.registry.byName("bombExplodeSmall");
@@ -947,19 +981,27 @@ void Sim::stepFlyer(Entity& f) {
     return;
   }
   const TypeDef& d = *f.type->def;
-  float range = float(home->type->def->num("range", d.num("range", 35)));
-  float hx = centreX(*home), hy = centreY(*home);
+  float range = based ? float(home->type->def->num("range", d.num("range", 35))) : float(d.num("range", 35));
+  float hx = based ? centreX(*home) : f.x, hy = based ? centreY(*home) : f.y;
+  bool whirligig = f.type->name == "sunFlyer";  // never goes after transports or priests
+  auto fair = [&](const Entity& e) {
+    if (whirligig && (e.role == Role::Golem || e.role == Role::Priest)) return false;
+    if (e.type && e.type->name == "thunderBlocker") return false;  // Bulwarks shrug off air attack
+    return true;
+  };
   // Keep the current target while it's alive and within the aviary's reach; otherwise the nearest.
   Entity* t = find(f.target);
   auto inReach = [&](const Entity& e) {
     float dx = centreX(e) - hx, dy = centreY(e) - hy;
     return dx * dx + dy * dy <= range * range;
   };
-  if (!t || !t->alive || !inReach(*t) || (t->role == Role::Priest && (t->carriedBy >= 0 || t->chainedAt >= 0))) {
+  if (!t || !t->alive || !inReach(*t) || !fair(*t) ||
+      (t->role == Role::Priest && (t->carriedBy >= 0 || t->chainedAt >= 0))) {
     t = nullptr;
     float best = 1e18f;
     for (auto& e : ents_) {
       if (!e.alive || e.owner == 0 || allied(e.owner, f.owner) || e.role == Role::Geyser || !inReach(e)) continue;
+      if (!fair(e) || e.role == Role::Flyer) continue;
       if (e.role == Role::Priest && (e.carriedBy >= 0 || e.chainedAt >= 0)) continue;
       float dx = centreX(e) - f.x, dy = centreY(e) - f.y, d2 = dx * dx + dy * dy;
       if (d2 < best) best = d2, t = &e;
@@ -980,6 +1022,8 @@ void Sim::stepFlyer(Entity& f) {
   // Strafe: continuous damage while close.
   if (t && dist < 4.0f) {
     damage(*t, float(d.num("hpPerSec", 15)) * kDt);
+    // Man o' Wars are rewarded for kills with another lifetime.
+    if (!t->alive && f.type->name == "rainFlyer") f.life += float(d.num("lifeSpan", 60));
     t->flash = 0.1f;
   }
 }

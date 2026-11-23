@@ -94,7 +94,7 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Production no longer deadlocks waiting for a generator it can't make; a generator-only workshop feeds starved ones.
 - Finished units that can't be placed yet are kept (they were being thrown away), production pauses while 2 are waiting.
 - Attack bridging: once there's no neutral land left, bridge towards open sky within range of enemy buildings.
-- Approximation: temples raise a replacement golem every 30 s up to the mission's collector count (golems have no cost in the data, so the original's replacement rule is still unknown).
+- Golems are made at the temple for 400 Storm Power without using a production slot (rule from a 2004 community unit FAQ; the data files give golems no cost). "+ GOLEM" button in the HUD; AI keeps at least two.
 - AI-vs-AI results: TheWarBegins won ~10 min, GuardMyBack won ~25 min, RainVsRain lost ~9 min, skirmish ~6.5 min.
 
 ## Air units
@@ -122,3 +122,20 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Upgrade cost is an estimate (half the workshop's cost x its level) - the original showed it in-game only.
 - Workshop menu shows level, slots (* committed, + would use a slot) and an Upgrade button. AI upgrades when its slots are full and it knows a better unit for that workshop.
 - Campaign missions don't use slots (their unit lists can be longer than 2).
+
+## Rules cross-checked against a community unit FAQ (2004)
+The type files stay authoritative for numbers; the FAQ fills in behaviour the data can't express:
+- Whirligigs (sun flyers) never attack transports or priests.
+- With its aviary standing a flyer never burns out - it flies home to refuel; if the aviary falls it fights on until its fuel runs out (it used to die instantly).
+- Man o' Wars (rain flyers) get another lifetime for every kill.
+- Dust Devils (wind flyers) are invulnerable (the data gives them no hit points either).
+- Cloud Floaters are hard to hit: ~1 hit in 20 connects (deterministic roll, lockstep-safe).
+- Bulwarks (thunder blockers) are immune to air attack.
+- Vander Tower ("anti-air" group in the data) only targets aircraft; Disc Throwers and Crossbows hit air too.
+- A transport that dies drops the priest it was carrying; a destroyed altar frees its captive.
+- Not yet: Outposts (multiplayer: claim neutral islands, crystal drop-off, bridge from them), spells, Ice Tower regeneration, Dust Devils cracking bridges, Crystal Crab stealing.
+
+## AI notes
+- With permanent slots the AI commits workshops to its strongest unit first and keeps a slot for a generator; Vander Towers only when the enemy flies; at most two aviaries while ground units are available.
+- Once its shooters outnumber an enemy's, the AI aims new units at that enemy's priest (the win condition).
+- Known weakness: AI-vs-AI in TheWarBegins / GuardMyBack can stall against fortified bases (human-vs-AI unaffected); skirmish ends ~6 min.

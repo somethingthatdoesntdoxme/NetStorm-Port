@@ -210,6 +210,16 @@ void SkirmishAi::produce(Sim& sim) {
   float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);
+  // Golems are our income: keep enough of them (bought at the temple, 400 each).
+  {
+    int golems = 0;
+    for (auto& e : sim.entities()) golems += e.alive && e.owner == player_ && e.role == Role::Golem;
+    if (golems < std::max(2, sim.player(player_).golemTarget) && sim.player(player_).power >= Sim::kGolemCost) {
+      std::string why;
+      if (sim.buyGolem(player_, &why)) return;
+      if (tick_ % 600 == 7) sim.log("P" + std::to_string(player_) + " AI couldn't make a golem: " + why);
+    }
+  }
   // A balloon when free geysers lie out of reach of our golems.
   {
     int balloons = 0;
@@ -274,8 +284,54 @@ void SkirmishAi::produce(Sim& sim) {
         if (t->def->str("group") == "battery" && power - float(t->def->num("cost", 0)) >= reserve &&
             sim.startBuild(w.id, t->name))
           return;
+    // Anti-air-only towers (Vander Tower) are wasted unless the enemy flies.
+    {
+      bool enemyAir = false;
+      for (auto& e : sim.entities())
+        enemyAir |= e.alive && e.owner > 0 && !sim.allied(e.owner, player_) &&
+                    (e.role == Role::Flyer || e.air || (e.type && e.type->def && e.type->def->str("group") == "aviary"));
+      if (!enemyAir)
+        shooterTypes.erase(std::remove_if(shooterTypes.begin(), shooterTypes.end(),
+                                          [](const TypeInfo* t) { return t->def->str("group") == "anti-air"; }),
+                           shooterTypes.end());
+    }
+    // Slots (skirmish): keep the last free slot for a generator if this workshop can make one.
+    if (sim.knowledgeGifts && int(w.slots.size()) + 1 == sim.slotCapacity(w)) {
+      bool hasGen = false, canGen = false;
+      for (auto& n : w.slots) {
+        const TypeInfo* t = sim.registryType(n);
+        hasGen |= t && t->def && t->def->str("group") == "battery";
+      }
+      for (auto* t : list) canGen |= t->def->str("group") == "battery";
+      if (canGen && !hasGen)
+        shooterTypes.erase(std::remove_if(shooterTypes.begin(), shooterTypes.end(),
+                                          [&](const TypeInfo* t) {
+                                            return std::find(w.slots.begin(), w.slots.end(), t->name) == w.slots.end();
+                                          }),
+                           shooterTypes.end());
+    }
+    // Aviaries can't touch priests or transports, and archers shred their flyers:
+    // keep at most two and spend the rest on ground firepower (needed to knock
+    // the enemy priest down for capture).
+    {
+      int aviaries = 0;
+      for (auto& e : sim.entities())
+        aviaries += e.alive && e.owner == player_ && e.type && e.type->def && e.type->def->str("group") == "aviary";
+      bool ground = false;
+      for (auto* t : shooterTypes) ground |= t->def->str("group") != "aviary";
+      if (ground && aviaries >= 2)
+        shooterTypes.erase(std::remove_if(shooterTypes.begin(), shooterTypes.end(),
+                                          [](const TypeInfo* t) { return t->def->str("group") == "aviary"; }),
+                           shooterTypes.end());
+    }
     if (shooterTypes.empty()) continue;
-    size_t pick = (seed_ + uint32_t(tick_ / 20)) % shooterTypes.size();
+    // Strongest first (by cost): with permanent production slots, committing a
+    // slot to a short-range unit can leave a workshop unable to reach the enemy.
+    std::stable_sort(shooterTypes.begin(), shooterTypes.end(), [](const TypeInfo* a, const TypeInfo* b) {
+      return a->def->num("cost", 0) > b->def->num("cost", 0);
+    });
+    // Without slots, mix in some variety among what we can afford.
+    size_t pick = sim.knowledgeGifts ? 0 : (seed_ + uint32_t(tick_ / 20)) % shooterTypes.size();
     for (size_t k = 0; k < shooterTypes.size(); ++k) {
       const TypeInfo* t = shooterTypes[(pick + k) % shooterTypes.size()];
       if (power - float(t->def->num("cost", 0)) < reserve) continue;
@@ -336,6 +392,24 @@ void SkirmishAi::dropReady(Sim& sim, Island& world) {
         continue;
       float d = std::abs(e.x - myx) + std::abs(e.y - myy);
       if (d < best) best = d, axp = e.x, ayp = e.y;
+    }
+    // The win condition is knocking the enemy priest down for capture: once an
+    // enemy's shooters are thin, aim new units at its priest instead.
+    {
+      int foeShooters = 0;
+      const Entity* foePriest = nullptr;
+      float pd = 1e9f;
+      for (auto& e : sim.entities()) {
+        if (!e.alive || e.owner == 0 || e.owner == player_ || sim.allied(e.owner, player_)) continue;
+        if (e.role == Role::Shooter) ++foeShooters;
+        if (e.role == Role::Priest && !e.immobile && e.carriedBy < 0 && e.chainedAt < 0) {
+          float d = std::abs(e.x - myx) + std::abs(e.y - myy);
+          if (d < pd) pd = d, foePriest = &e;
+        }
+      }
+      int mine = 0;
+      for (auto& e : sim.entities()) mine += e.alive && e.owner == player_ && e.role == Role::Shooter;
+      if (foePriest && mine >= foeShooters) axp = foePriest->x, ayp = foePriest->y;
     }
     if (best == std::numeric_limits<float>::max()) axp = myx, ayp = myy;
   }

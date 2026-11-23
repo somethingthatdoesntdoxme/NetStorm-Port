@@ -61,7 +61,8 @@ struct Entity {
   // Altar
   int captive = -1;        // chained enemy priest
   float runes = 0;         // 0..5 runes warded
-  int altarLevel = 1;      // upgraded by sacrifices; grants Knowledge up to this level
+  int altarLevel = 1;
+  bool reloading = false;  // flyer heading home to refuel      // upgraded by sacrifices; grants Knowledge up to this level
   // Shooter
   float cooldown = 0;
   int lastTarget = -1;
@@ -130,6 +131,9 @@ class Sim {
   int slotCapacity(const Entity& w) const { return 1 + w.workshopLevel; }
   int upgradeCost(const Entity& w) const;  // estimate: half the workshop's cost x its level
   bool upgradeWorkshop(int workshopId, std::string* why = nullptr);
+  // Golems are made at the temple (no production slot needed).
+  static constexpr int kGolemCost = 400;
+  bool buyGolem(int player, std::string* why = nullptr);
   void stepFlyer(Entity& f);
   bool launchFlyer(Entity& aviary, Entity& target);
 
@@ -199,6 +203,8 @@ class Sim {
 
   const GameData& gd_;
   Island& world_;
+  uint32_t rng_ = 0x9E3779B9u;  // deterministic (lockstep-safe) chance rolls
+  uint32_t roll() { rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5; return rng_; }
   std::vector<Entity> ents_;
   std::array<PlayerState, 9> players_{};
   std::vector<Projectile> shots_;

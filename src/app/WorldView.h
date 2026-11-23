@@ -62,7 +62,8 @@ class WorldView {
   Sim* sim() { return sim_.get(); }
   std::string debugAi();
   int flyersAirborne() const;
-  void focusOnAir();  // test hook: centre the camera on the air fight  // per-player state dump for headless runs
+  void focusOnAir();
+  void debugGrantGift();  // test hook: give player 1 a finished sacrifice to choose a gift for  // test hook: centre the camera on the air fight  // per-player state dump for headless runs
   void setAiForMe(bool b) { aiForMe_ = b; }
   int player() const { return player_; }  // let the bridge AI play `pieces` pieces for the player
   const std::vector<std::string>& missions() const { return missions_; }
@@ -79,6 +80,10 @@ class WorldView {
   void startSim(float startPower);
   void drawHud();
   void drawDialog();
+  void drawGift();
+  bool handleGift(const SDL_Event& e);
+  std::vector<SDL_FRect> giftRects_;
+  std::vector<std::string> giftPicks_;
   bool handleDialog(const SDL_Event& e);
   void openSection(const ScriptSection* s);
   MissionInfo mission_;

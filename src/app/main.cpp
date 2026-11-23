@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
   double simulate = 0;
   bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
   int stopAtAir = 0;
+  bool testGift = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -70,6 +71,7 @@ int main(int argc, char** argv) {
     else if (a == "--simulate") simulate = std::atof(next().c_str());
     else if (a == "--demo") demo = true;
     else if (a == "--stop-at-note") stopAtNote = true;
+    else if (a == "--test-gift") testGift = true;
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
@@ -154,6 +156,7 @@ int main(int argc, char** argv) {
     state = State::Menu;
   }
   if (aiBoth) world.setAiForMe(true);
+  if (testGift) world.debugGrantGift();
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
   if (demo) std::printf("demo: started building %s\n", world.demoProduction().c_str());
   if (simulate > 0) {

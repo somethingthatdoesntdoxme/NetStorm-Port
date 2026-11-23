@@ -15,17 +15,21 @@ void SkirmishAi::step(Sim& sim, Island& world) {
       std::vector<std::pair<int, int>> goals;
       for (auto& e : sim.entities())
         if (e.alive && e.owner > 0 && e.owner != player_ && !sim.allied(e.owner, player_) &&
-            e.role != Role::Golem && e.role != Role::Geyser && e.carriedBy < 0)
+            e.role != Role::Golem && e.role != Role::Geyser && e.role != Role::Flyer && e.role != Role::Priest &&
+            e.carriedBy < 0)
           goals.push_back({int(e.x), int(e.y)});
       int reach = 0;
       for (auto& w : sim.entities())
         if (w.alive && w.owner == player_ && w.role == Role::Workshop)
           for (auto* t : sim.buildable(w.id)) {
             int r = int(t->def->num("range", 0));
-            if (r > 0 && (reach == 0 || r < reach)) reach = r;
+            if (r > reach) reach = r;  // our longest reach decides how close we must get
           }
       if (reach == 0) reach = 12;
-      if (!goals.empty()) moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, std::clamp(reach - 2, 5, 30));
+      // Reached firing range but no room to place there? Keep pushing in with
+      // tighter goals so the foothold gets wide enough for real units.
+      for (int r = std::clamp(reach - 2, 5, 30); !goals.empty() && !moved && r >= 4; r -= 5)
+        moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, r);
     }
     if (moved) placeBridge(world, queue_.current(), x, y, player_);
     queue_.next();
@@ -70,12 +74,12 @@ std::vector<std::string> SkirmishAi::neededWorkshops(Sim& sim, const std::string
     return out;
   }
   std::string shooterTheme, batteryTheme;
-  double bestCost = 1e9;
+  double bestCost = -1;
   for (auto& name : tech) {
     const TypeInfo* t = sim.registryType(name);
     if (!t || !t->def) continue;
     std::string th = lowerStr(t->def->str("theme"));
-    if (t->def->num("range", 0) > 0 && t->def->num("cost", 0) > 0 && t->def->num("cost", 0) < bestCost &&
+    if (t->def->num("range", 0) > 0 && t->def->num("cost", 0) > 0 && t->def->num("cost", 0) > bestCost &&
         !t->def->hasFlag("walker"))
       bestCost = t->def->num("cost", 0), shooterTheme = th;
   }
@@ -88,6 +92,7 @@ std::vector<std::string> SkirmishAi::neededWorkshops(Sim& sim, const std::string
       if (th == shooterTheme) break;
     }
   }
+  add("sun");  // common Knowledge: always worth a workshop
   add(shooterTheme);
   add(batteryTheme);
   return out;
@@ -106,6 +111,23 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
     if ((e.role == Role::Temple || e.role == Role::Workshop) && fury.empty()) fury = e.type->def->str("theme");
   }
   if (fury.empty() || fury == "Fire") fury = "sun";
+  // 0. A finished sacrifice: pick our gift.
+  if (sim.player(player_).giftAltar >= 0) {
+    auto opts = sim.giftOptions(player_);
+    const TypeInfo* pick = nullptr;
+    double best = -1;
+    for (auto* t : opts) {  // best attack unit of our fury (or sun), by cost
+      std::string th = lowerStr(t->def->str("theme"));
+      if (t->def->num("range", 0) > 0 && (th == lowerStr(fury) || th == "sun") && t->def->num("cost", 0) > best)
+        best = t->def->num("cost", 0), pick = t;
+    }
+    if (!pick)  // then that fury's generator
+      for (auto* t : opts)
+        if (t->def->str("group") == "battery" && lowerStr(t->def->str("theme")) == lowerStr(fury)) pick = t;
+    if (pick) sim.chooseGift(player_, pick->name);
+    else if (sim.canUpgradeAltar(player_)) sim.chooseGift(player_, "upgrade");
+    else if (!opts.empty()) sim.chooseGift(player_, opts.front()->name);
+  }
   // 1. Sacrifice: if we hold a captive, send our priest to the altar.
   for (auto& a : sim.entities()) {
     if (!a.alive || a.role != Role::Altar || a.owner != player_ || a.captive < 0 || !priest) continue;
@@ -122,12 +144,26 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
     for (auto& g : sim.entities())
       if (g.alive && g.role == Role::Golem && g.owner == player_ && g.target == pr.id) already = true;
     if (already) continue;
+    std::string why;
+    bool sent = false;
+    // Nearest golem first; a capture is worth more than the crystals it's holding.
+    std::vector<std::pair<float, int>> golems;
     for (auto& g : sim.entities())
-      if (g.alive && g.role == Role::Golem && g.owner == player_ && !g.carrying &&
-          sim.orderCapture(g.id, pr.id))
+      if (g.alive && g.role == Role::Golem && g.owner == player_ && g.carryingPriest < 0)
+        golems.push_back({(g.x - pr.x) * (g.x - pr.x) + (g.y - pr.y) * (g.y - pr.y), g.id});
+    std::sort(golems.begin(), golems.end());
+    for (auto& [d, id] : golems)
+      if (sim.orderCapture(id, pr.id, &why)) {
+        sent = true;
         break;
+      }
+    if (golems.empty()) why = "no golems";
+    if (!sent && tick_ % 1200 == 11) sim.log("P" + std::to_string(player_) + " AI capture failed: " + why);
   }
   if (!priest || priest->immobile || priest->job != Entity::Job::Idle) return;
+  // Finish anything we left half-built (e.g. after being knocked down) before starting more.
+  for (auto& b : sim.entities())
+    if (b.alive && b.owner == player_ && b.built < 1 && sim.orderResume(priest->id, b.id)) return;
   // 3. Construction: the workshops our Knowledge needs, then an altar once we're fighting.
   const TypeInfo* want = nullptr;
   for (auto& th : neededWorkshops(sim, fury)) {
@@ -258,8 +294,11 @@ void SkirmishAi::dropReady(Sim& sim, Island& world) {
   myy /= float(mine);
   float best = std::numeric_limits<float>::max();
   {  // shooters and generators both go towards the enemy
+    // Aim at enemy buildings (golems and flyers wander, so they make bad aim points).
     for (auto& e : sim.entities()) {
-      if (!e.alive || e.owner == 0 || sim.allied(e.owner, player_) || e.role == Role::Geyser) continue;
+      if (!e.alive || e.owner == 0 || sim.allied(e.owner, player_) || e.role == Role::Geyser ||
+          e.role == Role::Golem || e.role == Role::Flyer || e.role == Role::Priest)
+        continue;
       float d = std::abs(e.x - myx) + std::abs(e.y - myy);
       if (d < best) best = d, axp = e.x, ayp = e.y;
     }

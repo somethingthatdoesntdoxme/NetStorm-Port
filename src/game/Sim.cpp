@@ -752,6 +752,19 @@ bool Sim::orderConstruct(int priestId, const std::string& typeName, int ax, int 
   return true;
 }
 
+bool Sim::orderResume(int priestId, int buildingId) {
+  Entity* p = find(priestId);
+  Entity* b = find(buildingId);
+  if (!p || !b || p->role != Role::Priest || b->owner != p->owner || b->built >= 1 || p->immobile) return false;
+  int cx, cy;
+  approach(*b, cx, cy);
+  p->path = findPath(int(p->x), int(p->y), cx, cy, 0, 0);
+  if (p->path.empty() && (std::abs(p->x - cx) > 1 || std::abs(p->y - cy) > 1)) return false;
+  p->buildId = b->id;
+  p->job = Entity::Job::ToBuild;
+  return true;
+}
+
 bool Sim::orderCapture(int golemId, int priestId, std::string* why) {
   auto fail = [&](const char* m) {
     if (why) *why = m;
@@ -848,8 +861,11 @@ void Sim::stepAltar(Entity& a) {
     effects_.push_back(fx);
     a.captive = -1;
     a.runes = 0;
-    // When Knowledge is granted the altar is consumed.
-    a.alive = false;
+    if (knowledgeGifts) {
+      players_[size_t(a.owner)].giftAltar = a.id;  // the altar stays until the gift is chosen
+    } else {
+      a.alive = false;  // campaign: the altar is spent
+    }
     // Everything the sacrificed player owned stops working.
     for (auto& e : ents_)
       if (e.alive && e.owner == victim->owner) e.owner = 0;
@@ -924,6 +940,74 @@ void Sim::stepFlyer(Entity& f) {
     damage(*t, float(d.num("hpPerSec", 15)) * kDt);
     t->flash = 0.1f;
   }
+}
+
+// ---- Knowledge -------------------------------------------------------------
+
+static std::string lowerName(std::string s) {
+  for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+static bool isProduct(const TypeInfo* t) {
+  if (!t || !t->def || t->def->num("cost", 0) <= 0) return false;
+  const TypeDef& d = *t->def;
+  return d.hasFlag("emplacement") || d.hasFlag("walker") || d.hasFlag("balloon") || d.str("group") == "battery";
+}
+
+std::vector<std::string> Sim::starterKnowledge() const {
+  std::vector<std::string> out{"sunwalker"};
+  for (int s = 0; s < gd_.registry.count(); ++s) {
+    const TypeInfo* t = gd_.registry.bySet(s);
+    if (isProduct(t) && t->def->num("techBit", -1) < 0) out.push_back(lowerName(t->name));
+  }
+  return out;
+}
+
+std::vector<const TypeInfo*> Sim::giftOptions(int player) const {
+  std::vector<const TypeInfo*> out;
+  const PlayerState& ps = players_[size_t(player)];
+  const Entity* altar = nullptr;
+  for (auto& e : ents_)
+    if (e.alive && e.id == ps.giftAltar) altar = &e;
+  if (!altar) return out;
+  for (int s = 0; s < gd_.registry.count(); ++s) {
+    const TypeInfo* t = gd_.registry.bySet(s);
+    if (!isProduct(t) || t->def->num("techBit", -1) < 0) continue;
+    if (int(t->def->num("level", 1)) > altar->altarLevel) continue;
+    if (std::find(ps.tech.begin(), ps.tech.end(), lowerName(t->name)) != ps.tech.end()) continue;
+    out.push_back(t);
+  }
+  return out;
+}
+
+bool Sim::canUpgradeAltar(int player) const {
+  for (auto& e : ents_)
+    if (e.alive && e.id == players_[size_t(player)].giftAltar) return e.altarLevel < 3;
+  return false;
+}
+
+bool Sim::chooseGift(int player, const std::string& pick) {
+  PlayerState& ps = players_[size_t(player)];
+  Entity* altar = find(ps.giftAltar);
+  if (!altar || !altar->alive) {
+    ps.giftAltar = -1;
+    return false;
+  }
+  if (pick == "upgrade") {
+    if (altar->altarLevel >= 3) return false;
+    altar->altarLevel++;
+    log("P" + std::to_string(player) + " upgraded an altar to level " + std::to_string(altar->altarLevel));
+  } else {
+    bool ok = false;
+    for (auto* t : giftOptions(player)) ok |= lowerName(t->name) == lowerName(pick);
+    if (!ok) return false;
+    ps.tech.push_back(lowerName(pick));
+    altar->alive = false;  // "When new Knowledge is granted the Altar is consumed."
+    log("P" + std::to_string(player) + " gained the Knowledge of " + pick);
+  }
+  ps.giftAltar = -1;
+  return true;
 }
 
 }  // namespace ns

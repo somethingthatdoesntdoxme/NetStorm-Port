@@ -103,3 +103,10 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - Archers and aviaries can hit flyers; cannons can't. Flyers don't occupy ground cells.
 - Drawn in 8 directions, ~28px up, with their ground shadow.
 - Not yet: balloons (air transport), thunder aviary (no stats in data), exact flyer speed scale (data speed x4 cells/s, estimated).
+
+## Knowledge from sacrifice (skirmish)
+- Start with every buildable unit that has no techBit in the data (Disc Throwers, Sun Cannons, Sun generator...); everything else is earned.
+- A finished sacrifice offers a gift: Knowledge of a unit up to the altar's level (consumes the altar), or upgrading the altar (max level 3). Picked from a "Gift of the Furies" panel; the AI picks its fury's best shooter, else its generator, else upgrades.
+- Campaign missions keep their own fixed Knowledge lists.
+- AI fixes found on the way: aim drops at buildings (not wandering golems), push bridges deeper when the foothold is too thin, send the nearest golem (even mid-haul) to capture, priests finish half-built buildings.
+- tests/test_knowledge.cpp covers the rules.

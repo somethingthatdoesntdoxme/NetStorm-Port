@@ -5,6 +5,7 @@
 #include <cmath>
 #include <map>
 #include <cstdio>
+#include <cstdlib>
 
 #include "render/TinyFont.h"
 
@@ -101,6 +102,9 @@ void WorldView::startSim(float startPower) {
   for (int p = 1; p <= 8; ++p)
     if (present[size_t(p)]) ais_.emplace_back(p, uint32_t(1000 + p * 77 + seed_));
   for (int p = 0; p <= 8; ++p) sim_->player(p).power = startPower;
+  // Skirmish rules: start with the common Knowledge, earn the rest by sacrifice.
+  sim_->knowledgeGifts = true;
+  for (int p = 1; p <= 8; ++p) sim_->player(p).tech = sim_->starterKnowledge();
   const TypeInfo* golem = gd_.registry.byName("sunWalker");
   if (!golem) return;
   std::vector<std::pair<int, int>> temples;  // id, owner
@@ -168,6 +172,7 @@ void WorldView::buildTestScene(uint32_t seed) {
 }
 void WorldView::handle(const SDL_Event& e) {
   if (handleDialog(e)) return;
+  if (handleGift(e)) return;
   switch (e.type) {
     case SDL_QUIT: quit_ = true; break;
     case SDL_KEYDOWN:
@@ -410,6 +415,7 @@ bool WorldView::startMission(const MissionInfo& info) {
   if (!loadMissionByName(info.fort + ".fort")) return false;
   sceneName_ = info.title;
   missionTitle_ = info.title;
+  sim_->knowledgeGifts = false;  // campaign: each mission sets its own Knowledge
   player_ = 1;
   colours_ = {};
   colours_[1] = {45, 120, 255, 255};  // you are blue
@@ -1007,6 +1013,7 @@ void WorldView::draw() {
   drawCombat();
   if (dropIndex_ < 0) drawBuildUi();
   drawHud();
+  drawGift();
   drawDialog();
   char t[256];
   std::snprintf(t, sizeof t,
@@ -1180,6 +1187,17 @@ std::string WorldView::debugAi() {
         if (d < gap) gap = d, rng = float(e.type->def->num("range", 0));
       }
     }
+    if (std::getenv("NS_DEBUG_SHOOTERS"))
+      for (auto& e : sim_->entities()) {
+        if (!e.alive || e.owner != p || e.role != Role::Shooter) continue;
+        float g = 1e9f;
+        for (auto& t : sim_->entities())
+          if (t.alive && t.owner > 0 && t.owner != p && !sim_->allied(p, t.owner) && t.role != Role::Geyser)
+            g = std::min(g, std::sqrt((t.x - e.x) * (t.x - e.x) + (t.y - e.y) * (t.y - e.y)));
+        out += "    " + e.type->name + " range " + std::to_string(int(e.type->def->num("range", 0))) + " gap " +
+               std::to_string(int(g)) + " energy " +
+               std::to_string(sim_->energyAt(p, e.type->def->str("theme"), int(e.x), int(e.y))) + "\n";
+      }
     out += "  p" + std::to_string(p) + " nearest enemy " + std::to_string(int(gap)) + " cells, that shooter's range " +
            std::to_string(int(rng)) + "\n";
     std::string kl;
@@ -1246,6 +1264,99 @@ void WorldView::focusOnAir() {
       cam_.zoom = 3.0f;
       return;
     }
+}
+
+// ---- Gift of the Furies: pick new Knowledge or upgrade the altar ----------
+
+static std::string upperStr(std::string s) {
+  for (auto& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
+void WorldView::drawGift() {
+  giftRects_.clear();
+  giftPicks_.clear();
+  if (!sim_ || aiForMe_ || sim_->player(player_).giftAltar < 0) return;
+  SDL_Renderer* ren = r_.sdl();
+  int sw, sh;
+  r_.outputSize(sw, sh);
+  auto opts = sim_->giftOptions(player_);
+  std::sort(opts.begin(), opts.end(), [](const TypeInfo* a, const TypeInfo* b) {
+    int la = int(a->def->num("level", 1)), lb = int(b->def->num("level", 1));
+    return la != lb ? la > lb : a->def->num("cost", 0) > b->def->num("cost", 0);
+  });
+  struct Row {
+    std::string label, pick;
+    SDL_Color c;
+  };
+  std::vector<Row> rows;
+  if (sim_->canUpgradeAltar(player_)) {
+    int lvl = 1;
+    for (auto& e : sim_->entities())
+      if (e.id == sim_->player(player_).giftAltar) lvl = e.altarLevel;
+    rows.push_back({"UPGRADE ALTAR TO LEVEL " + std::to_string(lvl + 1), "upgrade", {255, 220, 110, 255}});
+  }
+  for (auto* t : opts) {
+    std::string name = t->def->str("description", t->name);
+    std::string th = upperStr(t->def->str("theme"));
+    rows.push_back({upperStr(name) + "  (" + th + ", LV " + std::to_string(int(t->def->num("level", 1))) + ", " +
+                        std::to_string(int(t->def->num("cost", 0))) + ")",
+                    t->name, {235, 235, 235, 255}});
+  }
+  float rh = 30, y = 96;
+  size_t fit = size_t(std::max(1.0f, (float(sh) - y - 90) / (rh + 4)));
+  int cols = rows.size() > fit ? 2 : 1;
+  size_t perCol = (rows.size() + cols - 1) / cols;
+  float colW = 560, w = colW * cols, x = float(sw) - w - 12;
+  float h = 70 + perCol * (rh + 4);
+  SDL_FRect box{x, y, w, h};
+  SDL_SetRenderDrawColor(ren, 24, 22, 36, 235);
+  SDL_RenderFillRectF(ren, &box);
+  SDL_SetRenderDrawColor(ren, 255, 210, 90, 255);
+  SDL_RenderDrawRectF(ren, &box);
+  drawText(ren, x + 16, y + 14, 3, "GIFT OF THE FURIES", {255, 220, 110, 255});
+  drawText(ren, x + 16, y + 42, 2, "CHOOSE NEW KNOWLEDGE (USES THE ALTAR)", {150, 150, 160, 255});
+  int mx, my;
+  SDL_GetMouseState(&mx, &my);
+  for (size_t i = 0; i < rows.size(); ++i) {
+    auto& r = rows[i];
+    float ry = y + 64 + float(i % perCol) * (rh + 4);
+    SDL_FRect rr{x + 12 + float(i / perCol) * colW, ry, colW - 24, rh};
+    bool hot = mx >= rr.x && mx <= rr.x + rr.w && my >= rr.y && my <= rr.y + rr.h;
+    SDL_SetRenderDrawColor(ren, hot ? 60 : 34, hot ? 50 : 32, hot ? 30 : 48, 255);
+    SDL_RenderFillRectF(ren, &rr);
+    drawText(ren, rr.x + 10, rr.y + 8, 2, r.label, r.c);
+    giftRects_.push_back(rr);
+    giftPicks_.push_back(r.pick);
+  }
+}
+
+bool WorldView::handleGift(const SDL_Event& e) {
+  if (giftRects_.empty() || e.type != SDL_MOUSEBUTTONUP || e.button.button != SDL_BUTTON_LEFT) return false;
+  for (size_t i = 0; i < giftRects_.size(); ++i) {
+    auto& r = giftRects_[i];
+    if (e.button.x < r.x || e.button.x > r.x + r.w || e.button.y < r.y || e.button.y > r.y + r.h) continue;
+    if (sim_->chooseGift(player_, giftPicks_[i])) {
+      message_ = giftPicks_[i] == "upgrade" ? "YOUR ALTAR GROWS STRONGER" : "NEW KNOWLEDGE: " + upperStr(giftPicks_[i]);
+      messageTime_ = time_;
+    }
+    return true;
+  }
+  return false;
+}
+
+void WorldView::debugGrantGift() {
+  if (!sim_) return;
+  sim_->knowledgeGifts = true;
+  const TypeInfo* altar = gd_.registry.byName("altar");
+  int temple = -1;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.owner == player_ && e.role == Role::Temple) temple = e.id;
+  Entity* t = sim_->find(temple);
+  if (!altar || !t) return;
+  int id = sim_->spawn(altar, player_, t->x + 8, t->y);
+  sim_->find(id)->altarLevel = 2;
+  sim_->player(player_).giftAltar = id;
 }
 
 }  // namespace ns

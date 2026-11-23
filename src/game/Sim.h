@@ -59,6 +59,7 @@ struct Entity {
   // Altar
   int captive = -1;        // chained enemy priest
   float runes = 0;         // 0..5 runes warded
+  int altarLevel = 1;      // upgraded by sacrifices; grants Knowledge up to this level
   // Shooter
   float cooldown = 0;
   int lastTarget = -1;
@@ -92,6 +93,7 @@ struct PlayerState {
   std::vector<std::string> tech;  // lower-case unit names this player may build (empty = all)
   uint16_t allies = 0;            // bitmask of allied players
   float power = 0;  // Storm Power
+  int giftAltar = -1;         // altar whose finished sacrifice awaits a gift choice
   int golemTarget = 2;        // temple replaces lost golems up to this many
   float golemTimer = 0;
   int delivered = 0;
@@ -108,6 +110,16 @@ class Sim {
   // Spawns a walker on a free walkable cell next to building `nearId`.
   int spawnWalkerNear(const TypeInfo* t, int owner, int nearId);
   void step();  // one fixed tick
+  // Knowledge from sacrifice (skirmish/multiplayer). When enabled, a finished
+  // sacrifice leaves a gift to choose: new Knowledge (consumes the altar) or an
+  // altar upgrade. Starting Knowledge = every buildable unit with no techBit.
+  bool knowledgeGifts = false;
+  std::vector<std::string> starterKnowledge() const;
+  std::vector<const TypeInfo*> giftOptions(int player) const;  // Knowledge on offer
+  bool canUpgradeAltar(int player) const;
+  bool chooseGift(int player, const std::string& unitOrUpgrade);  // "upgrade" or a unit name
+  // Send a priest back to finish one of his player's half-built buildings.
+  bool orderResume(int priestId, int buildingId);
   void stepFlyer(Entity& f);
   bool launchFlyer(Entity& aviary, Entity& target);
 

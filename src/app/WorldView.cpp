@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
 #include <cstdio>
 
 #include "render/TinyFont.h"
@@ -418,6 +419,7 @@ bool WorldView::startMission(const MissionInfo& info) {
     names_[size_t(p)] = mp.present ? mp.name : "";
     if (!mp.present) continue;
     ps.power = mp.startMoney;
+    ps.golemTarget = std::clamp(mp.collectors, 2, 6);
     ps.tech.clear();
     for (auto t : mp.tech) {
       std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -1122,6 +1124,72 @@ void WorldView::drawDialog() {
     dialogButtons_.push_back(r);
     by += bh + 8;
   }
+}
+
+std::string WorldView::debugAi() {
+  std::string out;
+  if (!sim_ || islands_.empty()) return out;
+  for (int p = 1; p <= 8; ++p) {
+    int n = 0, ws = 0, temples = 0;
+    std::string build;
+    for (auto& e : sim_->entities()) {
+      if (!e.alive || e.owner != p) continue;
+      ++n;
+      if (e.role == Role::Temple) ++temples;
+      if (e.role != Role::Workshop) continue;
+      ++ws;
+      build += " [" + e.type->name + ":";
+      for (auto* t : sim_->buildable(e.id)) build += " " + t->name;
+      build += "]";
+    }
+    if (!n) continue;
+    BridgeQueue q(99);
+    int bx, by, moves = 0;
+    uint16_t en = 0;
+    for (int o = 1; o <= 8; ++o)
+      if (o != p && !sim_->allied(o, p) && !sim_->eliminated(o)) en |= uint16_t(1u << o);
+    int attack = 0;
+    for (int i = 0; i < 6; ++i, q.next()) moves += bestBridgeMove(islands_[0], q, p, bx, by);
+    std::vector<std::pair<int, int>> goals;
+    for (auto& e : sim_->entities())
+      if (e.alive && e.owner > 0 && e.owner != p && !sim_->allied(e.owner, p) && e.role != Role::Golem &&
+          e.role != Role::Geyser)
+        goals.push_back({int(e.x), int(e.y)});
+    for (int i = 0; i < 6; ++i, q.next()) attack += bestBridgeMove(islands_[0], q, p, bx, by, 0, &goals, 10);
+    out += "  p" + std::to_string(p) + " attackMoves/6=" + std::to_string(attack) + " enemyMask=" + std::to_string(en) + "\n";
+    std::string tech;
+    for (auto& t : sim_->player(p).tech) tech += t + ",";
+    std::map<std::string, int> kinds;
+    int powered = 0, shootersN = 0;
+    for (auto& e : sim_->entities()) {
+      if (!e.alive || e.owner != p || !e.type) continue;
+      kinds[e.type->name + "/" + std::to_string(int(e.role))]++;
+      if (e.role == Role::Shooter) {
+        ++shootersN;
+        int need = int(e.type->def->num("minUsage", 0));
+        if (need <= 0 || sim_->energyAt(p, e.type->def->str("theme"), int(e.x), int(e.y)) >= need) ++powered;
+      }
+    }
+    float gap = 1e9f, rng = 0;
+    for (auto& e : sim_->entities()) {
+      if (!e.alive || e.owner != p || e.role != Role::Shooter) continue;
+      for (auto& t : sim_->entities()) {
+        if (!t.alive || t.owner == 0 || t.owner == p || sim_->allied(p, t.owner) || t.role == Role::Geyser) continue;
+        float d = std::sqrt((t.x - e.x) * (t.x - e.x) + (t.y - e.y) * (t.y - e.y));
+        if (d < gap) gap = d, rng = float(e.type->def->num("range", 0));
+      }
+    }
+    out += "  p" + std::to_string(p) + " nearest enemy " + std::to_string(int(gap)) + " cells, that shooter's range " +
+           std::to_string(int(rng)) + "\n";
+    std::string kl;
+    for (auto& [k, v] : kinds) kl += " " + k + "x" + std::to_string(v);
+    out += "  p" + std::to_string(p) + " kinds:" + kl + " shooters=" + std::to_string(shootersN) +
+           " powered=" + std::to_string(powered) + "\n";
+    out += "p" + std::to_string(p) + ": ents=" + std::to_string(n) + " temples=" + std::to_string(temples) +
+           " workshops=" + std::to_string(ws) + " bridgeMoves/6=" + std::to_string(moves) + " tech={" + tech + "}" +
+           build + "\n";
+  }
+  return out;
 }
 
 }  // namespace ns

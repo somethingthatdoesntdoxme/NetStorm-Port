@@ -10,7 +10,24 @@ void SkirmishAi::step(Sim& sim, Island& world) {
   ++tick_;
   if (tick_ % bridgeEvery_ == 7 % bridgeEvery_) {  // a bridge piece every few seconds
     int x, y;
-    if (bestBridgeMove(world, queue_, player_, x, y)) placeBridge(world, queue_.current(), x, y, player_);
+    bool moved = bestBridgeMove(world, queue_, player_, x, y);
+    if (!moved) {  // nothing left to claim: get within shooting range of enemy buildings
+      std::vector<std::pair<int, int>> goals;
+      for (auto& e : sim.entities())
+        if (e.alive && e.owner > 0 && e.owner != player_ && !sim.allied(e.owner, player_) &&
+            e.role != Role::Golem && e.role != Role::Geyser && e.carriedBy < 0)
+          goals.push_back({int(e.x), int(e.y)});
+      int reach = 0;
+      for (auto& w : sim.entities())
+        if (w.alive && w.owner == player_ && w.role == Role::Workshop)
+          for (auto* t : sim.buildable(w.id)) {
+            int r = int(t->def->num("range", 0));
+            if (r > 0 && (reach == 0 || r < reach)) reach = r;
+          }
+      if (reach == 0) reach = 12;
+      if (!goals.empty()) moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, std::clamp(reach - 2, 5, 30));
+    }
+    if (moved) placeBridge(world, queue_.current(), x, y, player_);
     queue_.next();
   }
   if (tick_ % 20 == 3) produce(sim);
@@ -31,6 +48,49 @@ bool SkirmishAi::findSite(Sim& sim, Island& world, int priestId, const TypeInfo*
       if (sim.canConstruct(priestId, t, x, y)) best = d, bx = x, by = y, found = true;
     }
   return found;
+}
+
+static std::string lowerStr(std::string s) {
+  for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// Which furies' workshops we need: one for our best attack unit, one for a
+// generator that can power it (sun units take any energy). No tech list =
+// everything allowed: our own fury plus sun.
+std::vector<std::string> SkirmishAi::neededWorkshops(Sim& sim, const std::string& fury) {
+  const auto& tech = sim.player(player_).tech;
+  std::vector<std::string> out;
+  auto add = [&](const std::string& t) {
+    if (!t.empty() && std::find(out.begin(), out.end(), t) == out.end()) out.push_back(t);
+  };
+  if (tech.empty()) {
+    add(lowerStr(fury));
+    add("sun");
+    return out;
+  }
+  std::string shooterTheme, batteryTheme;
+  double bestCost = 1e9;
+  for (auto& name : tech) {
+    const TypeInfo* t = sim.registryType(name);
+    if (!t || !t->def) continue;
+    std::string th = lowerStr(t->def->str("theme"));
+    if (t->def->num("range", 0) > 0 && t->def->num("cost", 0) > 0 && t->def->num("cost", 0) < bestCost &&
+        !t->def->hasFlag("walker"))
+      bestCost = t->def->num("cost", 0), shooterTheme = th;
+  }
+  for (auto& name : tech) {
+    const TypeInfo* t = sim.registryType(name);
+    if (!t || !t->def || t->def->str("group") != "battery") continue;
+    std::string th = lowerStr(t->def->str("theme"));
+    if (shooterTheme == "sun" || th == shooterTheme) {
+      batteryTheme = th;
+      if (th == shooterTheme) break;
+    }
+  }
+  add(shooterTheme);
+  add(batteryTheme);
+  return out;
 }
 
 void SkirmishAi::priestWork(Sim& sim, Island& world) {
@@ -68,10 +128,19 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
         break;
   }
   if (!priest || priest->immobile || priest->job != Entity::Job::Idle) return;
-  // 3. Construction: a workshop if we have none, an altar once we're fighting.
+  // 3. Construction: the workshops our Knowledge needs, then an altar once we're fighting.
   const TypeInfo* want = nullptr;
-  if (workshops == 0) want = sim.registryType(fury + "Factory");
-  else if (altars == 0 && shooters >= 3) want = sim.registryType("altar");
+  for (auto& th : neededWorkshops(sim, fury)) {
+    bool have = false;
+    for (auto& e : sim.entities())
+      if (e.alive && e.owner == player_ && e.role == Role::Workshop && lowerStr(e.type->def->str("theme")) == th)
+        have = true;
+    if (!have) {
+      want = sim.registryType(th + "Factory");
+      break;
+    }
+  }
+  if (!want && altars == 0 && shooters >= 3) want = sim.registryType("altar");
   if (!want) return;
   int x, y;
   if (findSite(sim, world, priest->id, want, x, y)) sim.orderConstruct(priest->id, want->name, x, y);
@@ -102,30 +171,64 @@ void SkirmishAi::produce(Sim& sim) {
   float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);
+  if (sim.player(player_).ready.size() >= 2) return;  // place what we have first
   for (auto& w : sim.entities()) {
     if (!w.alive || w.role != Role::Workshop || w.owner != player_ || !w.building.empty()) continue;
-    std::string theme = w.type->def->str("theme");
     auto list = sim.buildable(w.id);
     float px = haveFront ? frontX : w.x, py = haveFront ? frontY : w.y;
-    // Generator first if this fury has no energy where the fighting is.
-    if (sim.energyAt(player_, theme, int(px), int(py)) < 20) {
+    float power = sim.player(player_).power;
+    // Shooters that would actually work at the front (enough energy of the right kind).
+    std::vector<const TypeInfo*> shooterTypes;
+    bool unpowered = false;
+    for (auto* t : list) {
+      if (t->def->num("range", 0) <= 0) continue;
+      int need = int(t->def->num("minUsage", 0));
+      if (need > 0 && sim.energyAt(player_, t->def->str("theme"), int(px), int(py)) < need) {
+        unpowered = true;
+        continue;
+      }
+      shooterTypes.push_back(t);
+    }
+    // Need energy first? Build a generator here if this workshop makes one.
+    if (shooterTypes.empty() && unpowered) {
       for (auto* t : list)
-        if (t->def->str("group") == "battery" && sim.player(player_).power - float(t->def->num("cost", 0)) >= reserve &&
+        if (t->def->str("group") == "battery" && power - float(t->def->num("cost", 0)) >= reserve &&
             sim.startBuild(w.id, t->name))
           return;
-      continue;
+      continue;  // another workshop may make the generator
     }
-    // Otherwise cycle through affordable shooters.
-    std::vector<const TypeInfo*> shooterTypes;
-    for (auto* t : list)
-      if (t->def->num("range", 0) > 0) shooterTypes.push_back(t);
+    // Also keep a generator coming every so often so the front stays powered.
+    if (unpowered && (tick_ / 20) % 3 == 0)
+      for (auto* t : list)
+        if (t->def->str("group") == "battery" && power - float(t->def->num("cost", 0)) >= reserve &&
+            sim.startBuild(w.id, t->name))
+          return;
     if (shooterTypes.empty()) continue;
     size_t pick = (seed_ + uint32_t(tick_ / 20)) % shooterTypes.size();
     for (size_t k = 0; k < shooterTypes.size(); ++k) {
       const TypeInfo* t = shooterTypes[(pick + k) % shooterTypes.size()];
-      if (sim.player(player_).power - float(t->def->num("cost", 0)) < reserve) continue;
+      if (power - float(t->def->num("cost", 0)) < reserve) continue;
       if (sim.startBuild(w.id, t->name)) return;
     }
+  }
+  // A generator-only workshop builds generators when another one is starved.
+  for (auto& w : sim.entities()) {
+    if (!w.alive || w.role != Role::Workshop || w.owner != player_ || !w.building.empty()) continue;
+    bool starving = false;
+    for (auto& o : sim.entities()) {
+      if (!o.alive || o.role != Role::Workshop || o.owner != player_ || o.id == w.id) continue;
+      for (auto* t : sim.buildable(o.id)) {
+        int need = int(t->def->num("minUsage", 0));
+        if (t->def->num("range", 0) > 0 && need > 0 &&
+            sim.energyAt(player_, t->def->str("theme"), int(haveFront ? frontX : o.x), int(haveFront ? frontY : o.y)) < need)
+          starving = true;
+      }
+    }
+    if (!starving) continue;
+    for (auto* t : sim.buildable(w.id))
+      if (t->def->str("group") == "battery" && sim.player(player_).power - float(t->def->num("cost", 0)) >= reserve &&
+          sim.startBuild(w.id, t->name))
+        return;
   }
 }
 
@@ -184,7 +287,9 @@ void SkirmishAi::dropReady(Sim& sim, Island& world) {
         }
     }
   if (bx >= 0) sim.dropUnit(player_, 0, bx, by);
-  else ready.erase(ready.begin());  // nowhere to put it: drop it from the list
+  // Nowhere to put it yet: keep it (it's paid for) and try again once we've
+  // bridged further. Rotate so one awkward unit doesn't block the rest.
+  else if (ready.size() > 1) std::rotate(ready.begin(), ready.begin() + 1, ready.end());
 }
 
 }  // namespace ns

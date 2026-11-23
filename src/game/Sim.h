@@ -89,6 +89,8 @@ struct PlayerState {
   std::vector<std::string> tech;  // lower-case unit names this player may build (empty = all)
   uint16_t allies = 0;            // bitmask of allied players
   float power = 0;  // Storm Power
+  int golemTarget = 2;        // temple replaces lost golems up to this many
+  float golemTimer = 0;
   int delivered = 0;
   std::vector<std::string> ready;  // finished units waiting to be placed
 };

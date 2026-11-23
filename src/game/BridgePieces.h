@@ -40,6 +40,12 @@ int placeBridge(Island& world, const BridgeShape& shape, int x, int y, int playe
 // Simple bridge AI: finds the best legal drop of `queue`'s current piece
 // (any rotation) that brings `player` closer to unowned or enemy land. Returns false if
 // nothing useful fits. Applies the rotation to the queue.
-bool bestBridgeMove(const Island& world, BridgeQueue& queue, int player, int& outX, int& outY);
+// enemyMask = 0: expand towards unclaimed (or any foreign) land.
+// enemyMask != 0 (bit N = player N): push towards those players' land and bridges.
+// goals != nullptr: instead, get within `goalRadius` cells (through open sky)
+// of any goal point -- e.g. enemy buildings, so our shooters can reach them.
+bool bestBridgeMove(const Island& world, BridgeQueue& queue, int player, int& outX, int& outY,
+                    uint16_t enemyMask = 0, const std::vector<std::pair<int, int>>* goals = nullptr,
+                    int goalRadius = 0);
 
 }  // namespace ns

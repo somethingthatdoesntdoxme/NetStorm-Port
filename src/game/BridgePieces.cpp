@@ -98,7 +98,8 @@ int placeBridge(Island& w, const BridgeShape& shape, int x, int y, int player) {
   return claimed;
 }
 
-bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, int& outY) {
+bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, int& outY, uint16_t enemyMask,
+                    const std::vector<std::pair<int, int>>* goals, int goalRadius) {
   const int W = w.width(), H = w.height();
   // Distance (through open sky) to the nearest unowned land.
   std::vector<int> dist(size_t(W) * H, std::numeric_limits<int>::max());
@@ -106,7 +107,19 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
   int minX = W, minY = H, maxX = 0, maxY = 0;
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
-      if (w.filled(x, y) && w.ownerAt(x, y) != player) {  // unowned or enemy land
+      bool target = false;
+      if (goals) {
+        if (!w.filled(x, y) && !w.bridgeAt(x, y))
+          for (auto [gx, gy] : *goals)
+            if ((gx - x) * (gx - x) + (gy - y) * (gy - y) <= goalRadius * goalRadius) {
+              target = true;
+              break;
+            }
+      } else
+      target = enemyMask ? ((w.filled(x, y) && ((enemyMask >> w.ownerAt(x, y)) & 1)) ||
+                                 (w.bridgeAt(x, y) && ((enemyMask >> w.bridgeAt(x, y)) & 1)))
+                              : (w.filled(x, y) && w.ownerAt(x, y) != player);  // unowned or enemy land
+      if (target) {
         dist[size_t(y) * W + x] = 0;
         q.push_back(y * W + x);
       }

@@ -2,6 +2,8 @@
 // Skirmish AI v1. Plays the same moves a human can: bridge pieces, workshop
 // production, dropping finished units. Deterministic (driven by sim ticks).
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "game/BridgePieces.h"
 #include "game/Sim.h"
@@ -20,6 +22,7 @@ class SkirmishAi {
   void produce(Sim& sim);
   void dropReady(Sim& sim, Island& world);
   void priestWork(Sim& sim, Island& world);
+  std::vector<std::string> neededWorkshops(Sim& sim, const std::string& fury);
   bool findSite(Sim& sim, Island& world, int priestId, const TypeInfo* t, int& x, int& y);
   int player_;
   BridgeQueue queue_;

@@ -87,3 +87,12 @@ reading the decompiled engine (`tools/re`) and A/B testing against the original.
 - ESC in game opens pause menu (Resume / Restart / Quit to menu). Mission HUD shows title + players in their colours.
 - Scripted events: timed notes ([@N]), AI priest captured/dead/saved, AI temple half/dead, [Failed]/[Succeeded] combos end the mission with their own text. Notes are modal popups with the original buttons (Tell chains, LeaveBattle = surrender/defeat, MissionAbort, MissionRestart); notes with no harmless button get an Ignore option. Enter/Esc/A = harmless choice, 1-9 picks.
 - Missing: tutorials (no forts), tech unlocks via sacrifice.
+
+## AI v2 (campaign-capable)
+- Energy rule from the original help: Sun units run on any fury's energy; wind/rain/thunder units need their own fury's generators.
+- Priest builds the workshops its Knowledge actually needs (best attack unit's fury + a generator fury that can power it) instead of its temple's fury.
+- Production no longer deadlocks waiting for a generator it can't make; a generator-only workshop feeds starved ones.
+- Finished units that can't be placed yet are kept (they were being thrown away), production pauses while 2 are waiting.
+- Attack bridging: once there's no neutral land left, bridge towards open sky within range of enemy buildings.
+- Approximation: temples raise a replacement golem every 30 s up to the mission's collector count (golems have no cost in the data, so the original's replacement rule is still unknown).
+- AI-vs-AI results: TheWarBegins won ~10 min, GuardMyBack won ~25 min, RainVsRain lost ~9 min, skirmish ~6.5 min.

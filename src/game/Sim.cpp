@@ -99,6 +99,30 @@ void Sim::step() {
     else if (e.role == Role::Altar) stepAltar(e);
   }
   stepProjectiles();
+  // Temples slowly replace lost golems (approximation: one per 30 s, up to the
+  // mission's collector count) so a player can't be starved out for good.
+  {
+    std::array<int, 9> golems{}, temple{};
+    temple.fill(-1);
+    for (auto& e : ents_) {
+      if (!e.alive || e.owner <= 0 || e.owner > 8) continue;
+      if (e.role == Role::Golem) golems[size_t(e.owner)]++;
+      if (e.role == Role::Temple && e.built >= 1) temple[size_t(e.owner)] = e.id;
+    }
+    const TypeInfo* g = gd_.registry.byName("sunWalker");
+    for (int p = 1; p <= 8 && g; ++p) {
+      PlayerState& ps = players_[size_t(p)];
+      if (temple[size_t(p)] < 0 || out_[size_t(p)] || golems[size_t(p)] >= ps.golemTarget) {
+        ps.golemTimer = 0;
+        continue;
+      }
+      ps.golemTimer += kDt;
+      if (ps.golemTimer >= 30) {
+        ps.golemTimer = 0;
+        if (spawnWalkerNear(g, p, temple[size_t(p)]) >= 0) log("P" + std::to_string(p) + "'s temple raised a new golem");
+      }
+    }
+  }
   for (auto& fx : effects_) fx.t += kDt;
   effects_.erase(std::remove_if(effects_.begin(), effects_.end(), [](const Effect& f) { return f.t >= f.life; }),
                  effects_.end());
@@ -515,12 +539,22 @@ void Sim::stepGolem(Entity& g) {
   }
 }
 
+static bool sameTheme(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+
 int Sim::energyAt(int player, const std::string& theme, int x, int y) const {
   int total = 0;
   for (auto& e : ents_) {
     if (!e.alive || e.owner != player || !e.type || !e.type->def) continue;
     bool gen = (e.role == Role::Generator || e.role == Role::Temple) && e.built >= 1;
-    if (!gen || e.type->def->str("theme") != theme) continue;
+    if (!gen) continue;
+    // Sun ("common Knowledge") units run on any fury's energy; fury units need their own.
+    std::string gt = e.type->def->str("theme");
+    if (!sameTheme(theme, "sun") && !sameTheme(gt, theme)) continue;
     // Generators: -minUsage energy within ~20 cells; temples power their fury too.
     int amount = e.role == Role::Temple ? 100 : -int(e.type->def->num("minUsage", -100));
     float dx = e.x - x, dy = e.y - y;
@@ -581,7 +615,16 @@ void Sim::stepWorkshop(Entity& w) {
   float buildTime = t && t->def ? std::max(4.0f, float(t->def->num("cost", 400)) / 50.0f) : 8.0f;
   w.progress += kDt;
   if (w.progress >= buildTime) {
-    players_[size_t(w.owner)].ready.push_back(w.building);
+    if (t && t->def && t->def->hasFlag("walker") && roleFor(t) == Role::Golem) {
+      // Golems walk out of the temple rather than being dropped.
+      int temple = w.id;
+      for (auto& e : ents_)
+        if (e.alive && e.owner == w.owner && e.role == Role::Temple) temple = e.id;
+      spawnWalkerNear(t, w.owner, temple);
+      log("P" + std::to_string(w.owner) + " got a new golem");
+    } else {
+      players_[size_t(w.owner)].ready.push_back(w.building);
+    }
     w.building.clear();
     w.progress = 0;
   }

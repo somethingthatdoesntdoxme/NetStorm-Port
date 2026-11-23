@@ -40,6 +40,7 @@ void printStats(ns::WorldView& world, float before, double simulate, const ns::G
     if (counts[i])
       std::printf("\n  p%d power=%.0f delivered=%d ready=%zu", i, sim->player(i).power, sim->player(i).delivered,
                   sim->player(i).ready.size());
+  std::printf("\n%s", world.debugAi().c_str());
   std::printf("\n  winner=%d outcome(you)=%d\n", sim->winner(), world.outcome());
   for (auto& ev : sim->events()) std::printf("  %s\n", ev.c_str());
   std::printf("simulated %.0fs: player %d storm power %.0f -> %.0f, crystals delivered %d\n", simulate, world.player(),

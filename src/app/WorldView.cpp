@@ -186,7 +186,7 @@ void WorldView::handle(const SDL_Event& e) {
           }
           break;
         case SDLK_g: showGrid_ = !showGrid_; break;
-        case SDLK_r: queue_.rotate(); break;
+        case SDLK_r: issue({Command::Rotate}); break;
         case SDLK_p: paused = !paused; break;
         case SDLK_EQUALS:
         case SDLK_KP_PLUS: speed = std::min(4.0f, speed * 2); break;
@@ -230,7 +230,7 @@ void WorldView::handle(const SDL_Event& e) {
     // click / R rotates it, middle-drag pans.
     case SDL_MOUSEBUTTONDOWN:
       if (e.button.button == SDL_BUTTON_RIGHT) {
-        queue_.rotate();
+        issue({Command::Rotate});
       } else {
         dragging_ = true;
         leftDown_ = e.button.button == SDL_BUTTON_LEFT;
@@ -249,7 +249,7 @@ void WorldView::handle(const SDL_Event& e) {
           int ax, ay;
           anchorForCursor(gd_.registry.byName(constructType_), sx, sy, ax, ay);
           std::string why;
-          if (sim_->orderConstruct(selected_, constructType_, ax, ay, &why)) constructType_.clear();
+          if (issue({Command::Construct, 0, selected_, ax, ay, constructType_}, &why)) constructType_.clear();
           else {
             for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
             message_ = why, messageTime_ = time_;
@@ -261,7 +261,7 @@ void WorldView::handle(const SDL_Event& e) {
         } else if (clicked && clicked->role == Role::Priest && clicked->owner != player_ && sim_ &&
                    sim_->find(selected_) && sim_->find(selected_)->role == Role::Golem) {
           std::string why;
-          if (!sim_->orderCapture(selected_, clicked->id, &why)) {
+          if (!issue({Command::Capture, 0, selected_, clicked->id}, &why)) {
             for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
             message_ = why, messageTime_ = time_;
           } else {
@@ -275,7 +275,7 @@ void WorldView::handle(const SDL_Event& e) {
             float wx, wy;
             cam_.screenToWorld(sx, sy, wx, wy);
             int ax = int(std::floor(wx / kCellW)) + fx / 2, ay = int(std::floor(wy / kCellH)) + fy / 2;
-            if (sim_->dropUnit(player_, dropIndex_, ax, ay)) dropIndex_ = -1;
+            if (issue({Command::Drop, 0, dropIndex_, ax, ay})) dropIndex_ = -1;
             else message_ = "CANT DROP THERE - NEEDS OPEN SKY NEXT TO YOUR LAND", messageTime_ = time_;
           } else {
             dropIndex_ = -1;
@@ -288,13 +288,12 @@ void WorldView::handle(const SDL_Event& e) {
           cam_.screenToWorld(sx, sy, wx, wy);
           int cx = int(std::floor(wx / kCellW)), cy = int(std::floor(wy / kCellH));
           if (sim_->walkableAt(cx, cy)) {
-            if (!sim_->orderMove(selected_, cx, cy)) message_ = "CANT GET THERE", messageTime_ = time_;
+            if (!issue({Command::Move, 0, selected_, cx, cy})) message_ = "CANT GET THERE", messageTime_ = time_;
           } else {
             selected_ = -1;  // clicked sky: deselect
           }
-        } else if (hoverX_ >= 0 && canPlaceBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_)) {
-          placeBridge(islands_[0], queue_.current(), hoverX_, hoverY_, player_);
-          queue_.next();
+        } else if (hoverX_ >= 0 && canPlaceBridge(islands_[0], myQueue().current(), hoverX_, hoverY_, player_)) {
+          issue({Command::Bridge, 0, hoverX_, hoverY_});
         }
       }
       dragging_ = leftDown_ = false;
@@ -534,12 +533,13 @@ int WorldView::autoBuild(int pieces) {
   int placed = 0;
   for (int i = 0; i < pieces; ++i) {
     int x, y;
-    if (!bestBridgeMove(islands_[0], queue_, player_, x, y)) {
-      queue_.next();  // can't use this piece: discard it like the original
-      continue;
-    }
-    placeBridge(islands_[0], queue_.current(), x, y, player_);
-    queue_.next();
+    if (!sim_) break;
+    BridgeQueue probe = sim_->bridgeQueue(player_);  // a copy: the search may rotate it
+    if (!bestBridgeMove(islands_[0], probe, player_, x, y)) break;
+    // Match the rotation the search settled on, then place.
+    BridgeShape want = probe.current();
+    for (int r = 0; r < 4 && !(myQueue().current().cells == want.cells); ++r) issue({Command::Rotate});
+    if (!issue({Command::Bridge, 0, x, y})) break;
     ++placed;
   }
   return placed;
@@ -553,7 +553,7 @@ void WorldView::hoverCell(int sx, int sy) {
   int cx = int(std::floor((wx - isl.worldX) / kCellW)), cy = int(std::floor((wy - isl.worldY - isl.bob) / kCellH));
   // Centre the piece on the cursor.
   int mw = 0, mh = 0;
-  for (auto [x, y] : queue_.current().cells) mw = std::max(mw, x), mh = std::max(mh, y);
+  for (auto [x, y] : myQueue().current().cells) mw = std::max(mw, x), mh = std::max(mh, y);
   hoverX_ = cx - mw / 2;
   hoverY_ = cy - mh / 2;
 }
@@ -577,13 +577,13 @@ void WorldView::drawBuildUi() {
   const Island& isl = islands_[0];
   // Ghost of the current piece under the cursor.
   if (hoverX_ >= 0) {
-    bool ok = canPlaceBridge(isl, queue_.current(), hoverX_, hoverY_, player_);
+    bool ok = canPlaceBridge(isl, myQueue().current(), hoverX_, hoverY_, player_);
     int line = bridgeType_->findLine("A", 1);
     const SpriteTex& st = cache_.get(bridgeType_->set, bridgeType_->frame(line));
     if (st.tex) {
       SDL_SetTextureAlphaMod(st.tex, 170);
       SDL_SetTextureColorMod(st.tex, ok ? 150 : 255, ok ? 255 : 90, ok ? 150 : 90);
-      for (auto [dx, dy] : queue_.current().cells)
+      for (auto [dx, dy] : myQueue().current().cells)
         blit(st, float(isl.worldX + (hoverX_ + dx + 1) * kCellW - 1),
              float(isl.worldY + isl.bob + (hoverY_ + dy + 1) * kCellH - 1));
       SDL_SetTextureAlphaMod(st.tex, 255);
@@ -600,7 +600,7 @@ void WorldView::drawBuildUi() {
   int line = bridgeType_->findLine("A", 1);
   const SpriteTex& st = cache_.get(bridgeType_->set, bridgeType_->frame(line));
   for (int i = 0; i < BridgeQueue::kVisible; ++i) {
-    const BridgeShape& s = queue_.upcoming(i);
+    const BridgeShape& s = myQueue().upcoming(i);
     float px = 30, py = 30 + i * 112.0f;
     float k = i == 0 ? sc : sc * 0.75f;
     for (auto [dx, dy] : s.cells) {
@@ -639,14 +639,14 @@ bool WorldView::handleUiClick(int sx, int sy) {
     if (sx < b.r.x || sy < b.r.y || sx > b.r.x + b.r.w || sy > b.r.y + b.r.h) continue;
     if (b.action.rfind("build:", 0) == 0 && sim_) {
       std::string why;
-      if (!sim_->startBuild(selectedWorkshop_, b.action.substr(6), &why)) {
+      if (!issue({Command::Build, 0, selectedWorkshop_, 0, 0, b.action.substr(6)}, &why)) {
         for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
         message_ = why;
         messageTime_ = time_;
       }
     } else if (b.action == "golem" && sim_) {
       std::string why;
-      if (!sim_->buyGolem(player_, &why)) {
+      if (!issue({Command::Golem}, &why)) {
         for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
         message_ = why;
       } else {
@@ -655,7 +655,7 @@ bool WorldView::handleUiClick(int sx, int sy) {
       messageTime_ = time_;
     } else if (b.action == "upgrade" && sim_) {
       std::string why;
-      if (!sim_->upgradeWorkshop(selectedWorkshop_, &why)) {
+      if (!issue({Command::Upgrade, 0, selectedWorkshop_}, &why)) {
         for (auto& c : why) c = char(std::toupper(static_cast<unsigned char>(c)));
         message_ = why;
       } else {
@@ -1386,7 +1386,7 @@ bool WorldView::handleGift(const SDL_Event& e) {
   for (size_t i = 0; i < giftRects_.size(); ++i) {
     auto& r = giftRects_[i];
     if (e.button.x < r.x || e.button.x > r.x + r.w || e.button.y < r.y || e.button.y > r.y + r.h) continue;
-    if (sim_->chooseGift(player_, giftPicks_[i])) {
+    if (issue({Command::Gift, 0, 0, 0, 0, giftPicks_[i]})) {
       message_ = giftPicks_[i] == "upgrade" ? "YOUR ALTAR GROWS STRONGER" : "NEW KNOWLEDGE: " + upperStr(giftPicks_[i]);
       messageTime_ = time_;
     }
@@ -1425,6 +1425,16 @@ void WorldView::focusOnBalloon() {
       cam_.zoom = 3.0f;
       return;
     }
+}
+
+bool WorldView::issue(Command c, std::string* why) {
+  if (!sim_) return false;
+  c.player = uint8_t(player_);
+  if (netIssue) {  // lockstep: applied on every peer a few ticks from now
+    netIssue(c);
+    return true;
+  }
+  return sim_->apply(c, why);
 }
 
 }  // namespace ns

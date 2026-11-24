@@ -1,5 +1,7 @@
 #include "game/Sim.h"
 
+#include "core/DetMath.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cctype>
@@ -974,7 +976,7 @@ bool Sim::launchFlyer(Entity& av, Entity& target) {
   f->target = target.id;
   f->life = float(ft->def->num("lifeSpan", 60));
   if (ft->def->num("maxHitPoints", -1) < 0) f->maxHp = f->hp = 60;
-  f->heading = std::atan2(centreY(target) - f->y, centreX(target) - f->x);
+  f->heading = det::atan2(centreY(target) - f->y, centreX(target) - f->x);
   log("P" + std::to_string(av.owner) + " launched a " + ft->name);
   return true;
 }
@@ -992,10 +994,10 @@ void Sim::stepFlyer(Entity& f) {
       f.reloading = false;
       f.life = float(f.type->def->num("lifeSpan", 60));
     } else {
-      f.heading = std::atan2(dy, dx);
+      f.heading = det::atan2(dy, dx);
       float sp = float(f.type->def->num("speed", 2.0)) * 4.0f;
-      f.x += std::cos(f.heading) * sp * kDt;
-      f.y += std::sin(f.heading) * sp * kDt;
+      f.x += det::cos(f.heading) * sp * kDt;
+      f.y += det::sin(f.heading) * sp * kDt;
       return;
     }
   }
@@ -1041,15 +1043,15 @@ void Sim::stepFlyer(Entity& f) {
   // Fly: towards the target, circling it once close; with no target, loiter over the aviary.
   float gx = t ? centreX(*t) : hx, gy = t ? centreY(*t) : hy;
   float dx = gx - f.x, dy = gy - f.y, dist = std::sqrt(dx * dx + dy * dy);
-  float want = std::atan2(dy, dx);
+  float want = det::atan2(dy, dx);
   if (dist < 3.0f) want += 1.3f;  // circle
   if (!t && !based) want = f.heading + 1.3f;  // orphaned with nothing to hunt: circle where it is
-  float diff = std::remainder(want - f.heading, 6.2831853f);
+  float diff = det::angleDiff(want, f.heading);
   float turn = 4.0f * kDt;  // rad/s
   f.heading += std::clamp(diff, -turn, turn);
   float speed = float(d.num("speed", 2.0)) * 4.0f;  // cells/s (flyers are much faster than walkers)
-  f.x += std::cos(f.heading) * speed * kDt;
-  f.y += std::sin(f.heading) * speed * kDt;
+  f.x += det::cos(f.heading) * speed * kDt;
+  f.y += det::sin(f.heading) * speed * kDt;
   f.x = std::clamp(f.x, 0.0f, float(world_.width() - 1));  // never leave the map
   f.y = std::clamp(f.y, 0.0f, float(world_.height() - 1));
   // Strafe: continuous damage while close.
@@ -1213,6 +1215,57 @@ std::vector<std::string> Sim::validate() const {
     if (!std::isfinite(ps.power) || ps.power < -0.5f) bad.push_back("P" + std::to_string(p) + " Storm Power " + std::to_string(ps.power));
   }
   return bad;
+}
+
+// ---- Commands --------------------------------------------------------------
+
+bool Sim::apply(const Command& c, std::string* why) {
+  int p = c.player;
+  if (p < 1 || p > 8) return false;
+  auto owns = [&](int id) {
+    Entity* e = find(id);
+    return e && e->alive && e->owner == p;
+  };
+  auto fail = [&](const char* m) {
+    if (why) *why = m;
+    return false;
+  };
+  switch (c.type) {
+    case Command::Bridge: {
+      BridgeQueue& q = queues_[size_t(p)];
+      if (!canPlaceBridge(world_, q.current(), c.a, c.b, p)) return fail("can't place the bridge there");
+      placeBridge(world_, q.current(), c.a, c.b, p);
+      q.next();
+      return true;
+    }
+    case Command::Rotate: queues_[size_t(p)].rotate(); return true;
+    case Command::Construct:
+      if (!owns(c.a)) return fail("not your priest");
+      return orderConstruct(c.a, c.s, c.b, c.c, why);
+    case Command::Capture:
+      if (!owns(c.a)) return fail("not your golem");
+      return orderCapture(c.a, c.b, why);
+    case Command::Drop: return dropUnit(p, c.a, c.b, c.c) || fail("can't drop there");
+    case Command::Move:
+      if (!owns(c.a)) return fail("not your unit");
+      return orderMove(c.a, c.b, c.c) || fail("can't get there");
+    case Command::Build:
+      if (!owns(c.a)) return fail("not your workshop");
+      return startBuild(c.a, c.s, why);
+    case Command::Golem: return buyGolem(p, why);
+    case Command::Upgrade:
+      if (!owns(c.a)) return fail("not your workshop");
+      return upgradeWorkshop(c.a, why);
+    case Command::Gift: return chooseGift(p, c.s) || fail("can't choose that");
+    case Command::Resume:
+      if (!owns(c.a)) return fail("not your priest");
+      return orderResume(c.a, c.b) || fail("can't resume that");
+    case Command::Surrender:
+      out_[size_t(p)] = true;
+      log("P" + std::to_string(p) + " left the battle");
+      return true;
+    default: return false;
+  }
 }
 
 }  // namespace ns

@@ -19,6 +19,8 @@
 #include <vector>
 
 #include "data/GameData.h"
+#include "game/BridgePieces.h"
+#include "game/Command.h"
 #include "world/Island.h"
 
 namespace ns {
@@ -108,7 +110,13 @@ class Sim {
  public:
   static constexpr float kDt = 0.05f;  // 20 Hz
 
-  Sim(const GameData& gd, Island& world) : gd_(gd), world_(world) {}
+  Sim(const GameData& gd, Island& world, uint32_t seed = 1) : gd_(gd), world_(world) {
+    for (int p = 0; p <= 8; ++p) queues_[size_t(p)] = BridgeQueue(seed * 977u + uint32_t(p) * 131u + 7u);
+  }
+  // Applies a player's order (the only way players change the game -- see Command).
+  bool apply(const Command& c, std::string* why = nullptr);
+  BridgeQueue& bridgeQueue(int player) { return queues_[size_t(player)]; }
+  const BridgeQueue& bridgeQueue(int player) const { return queues_[size_t(player)]; }
 
   int spawn(const TypeInfo* t, int owner, float x, float y);
   // Spawns a walker on a free walkable cell next to building `nearId`.
@@ -209,6 +217,7 @@ class Sim {
 
   const GameData& gd_;
   Island& world_;
+  std::array<BridgeQueue, 9> queues_;
   uint32_t rng_ = 0x9E3779B9u;  // deterministic (lockstep-safe) chance rolls
   uint32_t roll() { rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5; return rng_; }
   std::vector<Entity> ents_;

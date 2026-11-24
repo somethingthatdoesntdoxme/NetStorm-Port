@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(NetStormPort LANGUAGES CXX)
 
+# Lockstep networking needs bit-identical float maths on every platform.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-ffp-contract=off)
+elseif(MSVC)
+  add_compile_options(/fp:precise)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -30,6 +37,7 @@ add_library(nscore STATIC
   src/game/Sim.cpp
   src/game/Ai.cpp
   src/game/MissionScript.cpp
+  src/game/Command.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)

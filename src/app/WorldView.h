@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // Milestone-1 world view: sky, floating islands auto-tiled from the real
 // terrain art, rock undersides, and buildings/units placed on the grid with
 // shadows and depth sorting. Uses a generated test layout until the .fort
@@ -51,6 +52,7 @@ class WorldView {
     std::string k = s.keys.empty() ? "" : s.keys[0];
     return "[" + k + "] " + std::to_string(s.buttons.size()) + " button(s)";
   }
+  std::function<void(const Command&)> netIssue;  // set by the LAN session
   bool abortRequested = false, restartRequested = false;  // from script buttons
   SDL_Color colourOf(int owner) const;
   bool paused = false;
@@ -81,6 +83,9 @@ class WorldView {
   void anchorOf(const Entity& e, float& wx, float& wy) const;
   void startSim(float startPower);
   void drawHud();
+  // Every order goes through here: applied now in local play, or handed to the
+  // network (netIssue) to be applied on every peer at the same tick.
+  bool issue(Command c, std::string* why = nullptr);
   void drawDialog();
   void drawGift();
   bool handleGift(const SDL_Event& e);
@@ -130,7 +135,9 @@ class WorldView {
   bool dragging_ = false, quit_ = false, showGrid_ = false;
   // Bridge building
   const TypeInfo* bridgeType_ = nullptr;
-  BridgeQueue queue_{1234};
+  BridgeQueue fallbackQueue_{1234};
+  // Our bridge pieces live in the sim (every lockstep peer must agree on them).
+  const BridgeQueue& myQueue() const { return sim_ ? sim_->bridgeQueue(player_) : fallbackQueue_; }
   int player_ = 1;
   int hoverX_ = -1, hoverY_ = -1;
   int pressX_ = 0, pressY_ = 0;

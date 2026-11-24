@@ -41,10 +41,16 @@ BridgeQueue::BridgeQueue(uint32_t seed) : rng_(seed) {
 }
 
 BridgeShape BridgeQueue::random() {
-  static const int weights[] = {6, 10, 8, 4, 8, 5, 5, 5, 4, 4, 2};
-  std::discrete_distribution<int> d(std::begin(weights), std::end(weights));
-  BridgeShape s = allShapes()[size_t(d(rng_))];
-  int rot = std::uniform_int_distribution<int>(0, 3)(rng_);
+  // Plain integer maths on the generator's raw output: std::*_distribution differs
+  // between standard libraries, which would desync a mixed-platform LAN game.
+  static const uint32_t weights[] = {6, 10, 8, 4, 8, 5, 5, 5, 4, 4, 2};
+  uint32_t total = 0;
+  for (uint32_t w : weights) total += w;
+  uint32_t r = uint32_t(rng_()) % total;
+  size_t pick = 0;
+  while (r >= weights[pick]) r -= weights[pick++];
+  BridgeShape s = allShapes()[pick];
+  int rot = int(uint32_t(rng_()) % 4);
   for (int i = 0; i < rot; ++i) s = s.rotated();
   return s;
 }

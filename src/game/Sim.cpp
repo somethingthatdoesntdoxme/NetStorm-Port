@@ -304,6 +304,36 @@ void Sim::kill(Entity& e) {
     pr->y = float(int(e.y)) + 0.5f;
     log("P" + std::to_string(pr->owner) + " priest was dropped");
   }
+  // Losing your temple loses you control of its island: it reverts to neutral,
+  // so anyone can bridge onto it and claim it.
+  if (e.role == Role::Temple && e.owner > 0) {
+    std::vector<std::pair<int, int>> stack{{int(e.x), int(e.y)}}, freedCells;
+    int freed = 0;
+    while (!stack.empty()) {
+      auto [x, y] = stack.back();
+      stack.pop_back();
+      if (!world_.filled(x, y) || world_.ownerAt(x, y) != e.owner) continue;
+      world_.setOwner(x, y, 0);
+      freedCells.push_back({x, y});
+      ++freed;
+      stack.push_back({x + 1, y}), stack.push_back({x - 1, y}), stack.push_back({x, y + 1}), stack.push_back({x, y - 1});
+    }
+    if (freed) log("P" + std::to_string(e.owner) + " lost its temple - its island is neutral again");
+    // Bridges already touching it claim it straight away (the side touching it most).
+    std::array<int, 9> contact{};
+    for (auto [x, y] : freedCells)
+      for (auto [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+        int b = world_.bridgeAt(x + dx, y + dy);
+        if (b > 0 && b <= 8 && b != e.owner) contact[size_t(b)]++;
+      }
+    int claimer = 0;
+    for (int p = 1; p <= 8; ++p)
+      if (contact[size_t(p)] > contact[size_t(claimer)]) claimer = p;
+    if (claimer > 0) {
+      for (auto [x, y] : freedCells) world_.setOwner(x, y, claimer);
+      log("P" + std::to_string(claimer) + " claimed the island");
+    }
+  }
   if (e.role == Role::Altar)
     if (Entity* pr = find(e.captive); pr && pr->chainedAt == e.id) {
       pr->chainedAt = -1;

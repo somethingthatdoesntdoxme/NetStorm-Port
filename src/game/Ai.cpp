@@ -473,6 +473,26 @@ void SkirmishAi::dropReady(Sim& sim, Island& world) {
           if (sim.canDropUnit(t, ax, ay, player_)) bd = d, bx = ax, by = ay;
         }
     }
+  // A shooter whose best spot can't reach any enemy target is wasted there: hold it
+  // (production pauses while two wait, which pushes our bridging forward) -- but
+  // not forever, or we'd deadlock on a map we can't bridge any further on.
+  if (bx >= 0 && t->def->num("range", 0) > 0) {
+    float r = float(t->def->num("range", 0)) - 1, nearest = 1e18f;
+    for (auto& e : sim.entities()) {
+      if (!e.alive || e.owner == 0 || e.owner == player_ || sim.allied(e.owner, player_) || e.role == Role::Geyser ||
+          e.role == Role::Golem || e.role == Role::Flyer)
+        continue;
+      nearest = std::min(nearest, (e.x - bx) * (e.x - bx) + (e.y - by) * (e.y - by));
+    }
+    if (nearest > r * r) {
+      if (holdSince_ < 0) holdSince_ = tick_;
+      if (tick_ - holdSince_ < 20 * 60) {
+        if (ready.size() > 1) std::rotate(ready.begin(), ready.begin() + 1, ready.end());
+        return;
+      }
+    }
+  }
+  holdSince_ = -1;
   if (bx >= 0) sim.dropUnit(player_, 0, bx, by);
   // Nowhere to put it yet: keep it (it's paid for) and try again once we've
   // bridged further. Rotate so one awkward unit doesn't block the rest.

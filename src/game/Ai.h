@@ -32,6 +32,7 @@ class SkirmishAi {
   const Island* world_ = nullptr;
   int reachFor_ = -1;      // downed enemy priest our golems couldn't reach: bridge towards him
   long reachSince_ = 0;
+  long holdSince_ = -1;   // tick we started holding an out-of-range shooter
 };
 
 }  // namespace ns

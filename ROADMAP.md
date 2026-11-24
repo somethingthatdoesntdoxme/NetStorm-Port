@@ -161,3 +161,16 @@ paid for (found by bisect).
 Known from the sweep (AI-vs-AI, normal difficulty, 20 game-minutes): the AI playing the human side wins none of the
 campaign missions (7 lost, 17 unfinished) - the AI needs a strength pass. BreakingThrough is lost in ~95 s because
 the engine's island placement (an approximation) puts the player's start inside enemy crossbow range.
+
+## AI pass 2 (scoreboard: tools/test/sweep.py, 8 missions x 20 game-minutes)
+- Temple loss: a destroyed temple's island reverts to neutral (community FAQ: losing the temple loses control of the
+  island); bridges already touching it claim it straight away (the side touching it most).
+- AI: power before aviaries (the aviary cap looks at what a workshop can build, so an unpowered front means a
+  generator); bridges towards an enemy priest it has knocked down but can't walk to (aims at the edge of his
+  landmass); extends bridges only from territory joined on foot to its temple (cut-off bridge ends don't count);
+  holds a shooter whose best spot can't reach any enemy target (up to a minute), which pushes bridging forward.
+- Help text (community build): only top-difficulty AIs sacrifice priests, stalemates are expected (declare a draw),
+  so the sweep labels a side reduced to priest + transports as STALEMATE.
+- Before -> after on the 8: 1 decisive (1 lost) + 7 unfinished -> 1 won, 3 lost, 1 stalemate, 3 unfinished.
+  Still unfinished: FragileFortune (temple taken and island claimed, but income dries up - transports can't walk the
+  long, cannon-cut route), GuardMyBack and Surrounded (4-5 player slogs).

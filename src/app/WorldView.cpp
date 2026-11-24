@@ -1080,6 +1080,17 @@ void WorldView::draw() {
   drawCombat();
   if (dropIndex_ < 0) drawBuildUi();
   drawHud();
+  if (!netStatus.empty()) {
+    int sw, sh;
+    r_.outputSize(sw, sh);
+    std::string t = netStatus;
+    for (auto& c : t) c = char(std::toupper(static_cast<unsigned char>(c)));
+    float w = float(t.size()) * 12 + 30;
+    SDL_FRect box{(sw - w) / 2, 56, w, 34};
+    SDL_SetRenderDrawColor(r_.sdl(), 20, 18, 30, 220);
+    SDL_RenderFillRectF(r_.sdl(), &box);
+    drawText(r_.sdl(), box.x + 15, box.y + 10, 2, t, {255, 210, 110, 255});
+  }
   drawGift();
   drawDialog();
   char t[256];

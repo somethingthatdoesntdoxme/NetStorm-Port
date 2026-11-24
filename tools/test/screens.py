@@ -13,7 +13,9 @@ os.makedirs(a.out, exist_ok=True)
 env = dict(os.environ, SDL_VIDEODRIVER="offscreen")
 shots = {
     "title": ["--menu", "title"], "chapters": ["--menu", "chapters"], "missions": ["--menu", "missions"],
-    "briefing": ["--menu", "brief"], "game_thewarbegins": ["--campaign", "thewarbegins"],
+    "briefing": ["--menu", "brief"],
+    "skirmish_setup": ["--menu", "skirmish"], "lan_browser": ["--menu", "lan"],
+    "game_skirmish": ["--skirmish", "--ai-both", "--simulate", "300"], "game_thewarbegins": ["--campaign", "thewarbegins"],
     "game_note": ["--campaign", "thunderingpower", "--simulate", "130", "--stop-at-note"],
     "game_gift": ["--mission", "skirmish", "--test-gift"],
     "game_air": ["--campaign", "thewarbegins", "--ai-both", "--simulate", "900", "--stop-at-air", "2"],

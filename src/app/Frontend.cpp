@@ -113,9 +113,56 @@ void Frontend::navigate(const std::string& go) {
   int sw, sh;
   r_.outputSize(sw, sh);
   hover_ = -1;
+  editing_ = 0;
+  SDL_StopTextInput();
+  if (go == "skirmish") {
+    screen_ = Screen::Setup;
+    lanMode_ = false;
+    if (setup_.players() < 2) {  // first visit: you vs one AI
+      setup_.slots[0] = {SkirmishSlot::Human, "rain", 0, ""};
+      setup_.slots[1] = {SkirmishSlot::AI, "thunder", 0, ""};
+    }
+    layoutSetup();
+    return;
+  }
+  if (go == "lan") {
+    screen_ = Screen::Lan;
+    lanMode_ = false;
+    if (lan_ && lan_->role() != LanSession::Role::None) lan_->leave();
+    if (const char* u = std::getenv("USERNAME"); u && name_ == "Player") name_ = u;
+    else if (const char* u2 = std::getenv("USER"); u2 && name_ == "Player") name_ = u2;
+    if (lan_) lan_->discover();
+    lastDiscover_ = SDL_GetTicks64();
+    layoutLan();
+    return;
+  }
+  if (go == "host" || go.rfind("join:", 0) == 0) {
+    std::string err;
+    bool ok = false;
+    if (lan_ && go == "host") {
+      SkirmishConfig c = setup_.players() >= 2 ? setup_ : SkirmishConfig{};
+      c.slots[0] = {SkirmishSlot::Human, c.slots[0].fury.empty() ? "rain" : c.slots[0].fury, c.slots[0].team, ""};
+      if (c.players() < 2) c.slots[1] = {SkirmishSlot::Human, "thunder", 0, ""};  // one open seat by default
+      ok = lan_->host(name_, c, LanSession::kPort, &err);
+    } else if (lan_) {
+      ok = lan_->join(go.substr(5), name_, LanSession::kPort, &err);
+    }
+    if (!ok) {
+      if (lan_) lan_->status = err.empty() ? "couldn't start" : err;
+      screen_ = Screen::Lan;
+      layoutLan();
+      return;
+    }
+    screen_ = Screen::Setup;
+    lanMode_ = true;
+    layoutSetup();
+    return;
+  }
+  skirmishResult_ = false;
   if (go == "title") {
     screen_ = Screen::Title;
-    layoutButtons({{"CAMPAIGN", "chapters"}, {"SKIRMISH (TEST MAP)", "skirmish"}, {"QUIT", "quit"}}, sh * 0.55f);
+    layoutButtons({{"CAMPAIGN", "chapters"}, {"SKIRMISH", "skirmish"}, {"LAN / INTERNET", "lan"}, {"QUIT", "quit"}},
+                  sh * 0.52f);
   } else if (go == "chapters") {
     screen_ = Screen::Chapters;
     std::vector<std::pair<std::string, std::string>> items;
@@ -205,6 +252,24 @@ void Frontend::navigate(const std::string& go) {
 }
 
 FrontendAction Frontend::handle(const SDL_Event& e) {
+  // Text boxes on the LAN screen.
+  if (editing_ && e.type == SDL_TEXTINPUT) {
+    std::string& f = editing_ == 1 ? name_ : addr_;
+    for (const char* c = e.text.text; *c; ++c)
+      if (f.size() < 40 && *c >= 32 && *c < 127) f += *c;
+    layoutLan();
+    return {};
+  }
+  if (editing_ && e.type == SDL_KEYDOWN) {
+    std::string& f = editing_ == 1 ? name_ : addr_;
+    if (e.key.keysym.sym == SDLK_BACKSPACE && !f.empty()) f.pop_back();
+    if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_ESCAPE) {
+      editing_ = 0;
+      SDL_StopTextInput();
+    }
+    layoutLan();
+    return {};
+  }
   if (e.type == SDL_MOUSEMOTION) {
     hover_ = -1;
     for (size_t i = 0; i < buttons_.size(); ++i) {
@@ -227,6 +292,14 @@ FrontendAction Frontend::handle(const SDL_Event& e) {
     if (e.button.x < b.r.x || e.button.x > b.r.x + b.r.w || e.button.y < b.r.y || e.button.y > b.r.y + b.r.h)
       continue;
     if (b.action.kind != FrontendAction::None) return b.action;
+    if (b.go.empty()) return {};  // read-only (e.g. a client in the lobby)
+    if (screen_ == Screen::Setup && b.go != "title") return setupClick(b.go);
+    if (b.go.rfind("edit:", 0) == 0) {
+      editing_ = b.go == "edit:name" ? 1 : 2;
+      SDL_StartTextInput();
+      layoutLan();
+      return {};
+    }
     if (b.go == "quit") return {FrontendAction::Quit, ""};
     if (b.go == "skirmish") return {FrontendAction::Skirmish, ""};
     if (b.go == "resume") {
@@ -284,7 +357,11 @@ void Frontend::draw() {
     drawText(ren, float(sw) - 380, 50, 2, "* = COMPLETED", kGrey);
   } else if (screen_ == Screen::Briefing || screen_ == Screen::Result) {
     const MissionInfo* m = mission(current_);
-    if (m) {
+    if (skirmishResult_ && screen_ == Screen::Result) {
+      float x = std::max(40.0f, sw / 2.0f - 560), w = std::min(1120.0f, sw - 80.0f);
+      drawText(ren, x, 50, 5, lastWon_ ? "VICTORY!" : "DEFEAT", lastWon_ ? kGreen : SDL_Color{255, 90, 80, 255});
+      drawPanelText(x, 120, w, 2.5f, resultText_, kWhite, float(sh) - 110);
+    } else if (m) {
       float x = std::max(40.0f, sw / 2.0f - 560), w = std::min(1120.0f, sw - 80.0f);
       std::string head = screen_ == Screen::Result ? (lastWon_ ? "SUCCESS!" : "FAILURE!") : upper(m->title);
       drawText(ren, x, 50, 5, head, screen_ == Screen::Result ? (lastWon_ ? kGreen : SDL_Color{255, 90, 80, 255}) : kGold);
@@ -303,6 +380,11 @@ void Frontend::draw() {
         if (!who.empty()) drawText(ren, x, float(sh) - 130, 2, "OPPONENTS/ALLIES: " + who, kGrey);
       }
     }
+  } else if (screen_ == Screen::Setup) {
+    if (lanMode_) layoutSetup();  // the lobby changes as people join
+    drawSetup();
+  } else if (screen_ == Screen::Lan) {
+    drawLan();
   } else if (screen_ == Screen::Pause) {
     drawText(ren, sw / 2.0f - 6 * 18, sh * 0.25f, 6, "PAUSED", kGold);
   }

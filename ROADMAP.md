@@ -174,3 +174,14 @@ the engine's island placement (an approximation) puts the player's start inside 
 - Before -> after on the 8: 1 decisive (1 lost) + 7 unfinished -> 1 won, 3 lost, 1 stalemate, 3 unfinished.
   Still unfinished: FragileFortune (temple taken and island claimed, but income dries up - transports can't walk the
   long, cannon-cut route), GuardMyBack and Surrounded (4-5 player slogs).
+
+## Skirmish + LAN (done)
+- Command layer: every player order is a Command applied by Sim::apply (lockstep foundation). Bridge queues live in
+  the sim. Deterministic trig (core/DetMath.h) and integer bridge RNG; FMA contraction off.
+- Skirmish setup screen + generated maps (game/Skirmish.cpp), up to 8 players, teams, furies, map size, power, islands.
+- LAN: net/Socket (POSIX + Winsock, non-blocking TCP, UDP broadcast), net/Lan (host relay lockstep: 200 ms turns,
+  2-turn input delay, state hash every 10 turns, disconnect = surrender, protocol versioning), LAN browser, lobby
+  (live seats/names), in-battle network status, skirmish/LAN results screen.
+- Tests: tools/test/lan.py (2 humans + AI, 3 humans, client killed mid-battle) via the command-only autopilot.
+- Next: internet play without port forwarding (relay or NAT punch-through), in-game chat, reconnect after a drop,
+  AI tuning for generated maps (homes have one geyser: economies are tight).

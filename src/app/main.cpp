@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
   double simulate = 0;
   bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
   int stopAtAir = 0;
-  bool testGift = false;
+  bool testGift = false, quickSkirmish = false;
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
     else if (a == "--demo") demo = true;
     else if (a == "--stop-at-note") stopAtNote = true;
     else if (a == "--test-gift") testGift = true;
+    else if (a == "--skirmish") quickSkirmish = true;  // setup screen defaults: you vs one AI
     else if (a == "--stop-at-balloon") stopAtBalloon = true;
     else if (a == "--validate") validate = true;
     else if (a == "--list-missions") listMissions = true;
@@ -135,6 +136,7 @@ int main(int argc, char** argv) {
   if (startSet >= 0) viewer.setSet(startSet);
   ns::WorldView world(r, gd);
   ns::Frontend front(r, gd);
+  ns::LanSession lan;
 
   enum class State { Menu, Game, Sprites } state = sprites ? State::Sprites : State::Menu;
   std::string currentMission;  // campaign mission being played ("" = skirmish/test)
@@ -155,7 +157,14 @@ int main(int argc, char** argv) {
     state = State::Game;
   }
   if (!campaign.empty()) startCampaign(campaign);
-  if (!menuShot.empty()) {
+  if (menuShot == "skirmish" || menuShot == "lan" || menuShot == "lobby") {  // screenshot hooks
+    front.setLan(&lan);
+    front.open(menuShot == "lobby" ? "host" : menuShot);
+    if (menuShot == "lobby") {  // give a joining test client a moment to arrive
+      for (int i = 0; i < 300; ++i) lan.poll(), SDL_Delay(10);
+    }
+    state = State::Menu;
+  } else if (!menuShot.empty()) {
     if (menuShot == "chapters") front.handle(SDL_Event{});  // no-op
     SDL_Event e{};
     e.type = SDL_MOUSEBUTTONUP;
@@ -185,7 +194,6 @@ int main(int argc, char** argv) {
     state = State::Menu;
   }
   // ---- LAN (headless test hooks; the menus drive the same session) ----
-  ns::LanSession lan;
   auto hookLan = [&]() {
     world.startSkirmish(lan.config(), lan.localPlayer());
     world.netIssue = [&](const ns::Command& c) { lan.issue(c); };
@@ -232,6 +240,12 @@ int main(int argc, char** argv) {
     hookLan();
   }
   world.autopilot = autopilot;
+  if (quickSkirmish) {
+    front.open("skirmish");
+    world.startSkirmish(front.setupConfig(), 1);
+    state = State::Game;
+    front.showTitle();
+  }
   if (aiBoth) world.setAiForMe(true);
   if (testGift) world.debugGrantGift();
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
@@ -343,6 +357,13 @@ int main(int argc, char** argv) {
     return ok ? 0 : 1;
   }
 
+  front.setLan(&lan);
+  bool skirmish = false;  // current battle is a skirmish/LAN one (not campaign)
+  auto unhookLan = [&]() {
+    world.netIssue = nullptr;
+    world.netTick = nullptr;
+    world.netStatus.clear();
+  };
   bool running = true;
   Uint64 last = SDL_GetPerformanceCounter();
   while (running) {
@@ -360,7 +381,7 @@ int main(int argc, char** argv) {
         world.handle(e);
         if (world.menuRequested) {
           world.menuRequested = false;
-          world.paused = true;
+          world.paused = !world.lockstep();  // a LAN battle can't pause for one player
           front.showPause();
           front.handle(SDL_Event{});
           state = State::Menu;
@@ -374,6 +395,14 @@ int main(int argc, char** argv) {
             currentMission.clear();
             state = State::Game;
             break;
+          case ns::FrontendAction::StartSkirmish:
+            unhookLan();
+            world.startSkirmish(front.setupConfig(), 1);
+            currentMission.clear();
+            skirmish = true;
+            state = State::Game;
+            break;
+          case ns::FrontendAction::LeaveLan: unhookLan(); break;
           case ns::FrontendAction::Resume:
             world.paused = false;
             state = State::Game;
@@ -381,10 +410,15 @@ int main(int argc, char** argv) {
           case ns::FrontendAction::Restart:
             world.paused = false;
             if (!currentMission.empty()) startCampaign(currentMission);
-            else world.buildTestScene(1), state = State::Game;
+            else if (skirmish && !world.lockstep()) world.startSkirmish(front.setupConfig(), 1), state = State::Game;
+            else state = State::Game;  // can't restart a LAN battle
             break;
           case ns::FrontendAction::QuitToMenu:
             world.paused = false;
+            if (world.lockstep()) {  // leaving a LAN battle: the host makes our army surrender
+              lan.leave();
+              unhookLan();
+            }
             front.showTitle();
             break;
           case ns::FrontendAction::Quit: running = false; break;
@@ -395,11 +429,26 @@ int main(int argc, char** argv) {
     Uint64 now = SDL_GetPerformanceCounter();
     double dt = double(now - last) / SDL_GetPerformanceFrequency();
     last = now;
+    lan.poll();
+    if (lan.justStarted()) {  // the host pressed Start: everyone begins together
+      hookLan();
+      skirmish = true;
+    }
+    if (world.lockstep()) world.netStatus = lan.desync ? "OUT OF SYNC: " + lan.status : lan.status;
+    // A LAN battle keeps running behind the pause menu.
+    if (state == State::Menu && world.lockstep() && front.screen() == ns::Frontend::Screen::Pause) world.update(dt);
     if (state == State::Game) {
       world.update(dt);
       int oc = world.outcome();
+      if (world.lockstep() && lan.state() == ns::LanSession::State::Ended && oc == 0)
+        world.netStatus = "CONNECTION LOST - " + lan.status;
       if (oc != 0 && !currentMission.empty()) {
         front.showResult(currentMission, oc > 0, world.resultText());
+        state = State::Menu;
+      } else if (oc != 0 && skirmish) {
+        front.showSkirmishResult(oc > 0);
+        if (world.lockstep()) lan.leave(), unhookLan();
+        skirmish = false;
         state = State::Menu;
       } else if (world.restartRequested && !currentMission.empty()) {
         startCampaign(currentMission);

@@ -10,18 +10,20 @@
 
 #include "data/GameData.h"
 #include "data/MissionInfo.h"
+#include "game/Skirmish.h"
+#include "net/Lan.h"
 #include "render/Renderer.h"
 
 namespace ns {
 
 struct FrontendAction {
-  enum Kind { None, Play, Skirmish, Resume, Restart, QuitToMenu, Quit } kind = None;
+  enum Kind { None, Play, Skirmish, StartSkirmish, LeaveLan, Resume, Restart, QuitToMenu, Quit } kind = None;
   std::string mission;  // for Play
 };
 
 class Frontend {
  public:
-  enum class Screen { Title, Chapters, Missions, Briefing, Result, Pause };
+  enum class Screen { Title, Chapters, Missions, Briefing, Result, Pause, Setup, Lan };
 
   Frontend(Renderer& r, const GameData& gd);
   ~Frontend();
@@ -32,6 +34,11 @@ class Frontend {
 
   void showTitle() { navigate("title"); }
   void showPause() { navigate("pause"); }
+  void open(const std::string& screen) { navigate(screen); }  // "skirmish", "lan" (also used by tests)
+  void showSkirmishResult(bool won);
+  void setLan(LanSession* lan) { lan_ = lan; }
+  const SkirmishConfig& setupConfig() const { return setup_; }
+  bool inLanLobby() const { return screen_ == Screen::Setup && lanMode_; }
   void showResult(const std::string& missionId, bool won, const std::string& text = "");
   const MissionInfo* mission(const std::string& id) const;
   void markDone(const std::string& id);
@@ -47,6 +54,13 @@ class Frontend {
   void drawBackground(bool dim);
   void drawPanelText(float x, float y, float w, float scale, const std::string& text, SDL_Color c, float maxY);
   void navigate(const std::string& go);
+  // Skirmish setup / LAN lobby / LAN browser (FrontendSetup.cpp)
+  void layoutSetup();
+  void drawSetup();
+  void layoutLan();
+  void drawLan();
+  FrontendAction setupClick(const std::string& go);
+  void addButton(SDL_FRect r, const std::string& label, const std::string& go);
   void loadProgress();
   void saveProgress();
 
@@ -67,6 +81,12 @@ class Frontend {
   std::vector<Button> buttons_;
   int hover_ = -1;
   int scroll_ = 0;
+  LanSession* lan_ = nullptr;
+  SkirmishConfig setup_;
+  bool lanMode_ = false, skirmishResult_ = false;
+  std::string addr_ = "127.0.0.1", name_ = "Player";
+  int editing_ = 0;  // 0 none, 1 name, 2 address
+  Uint64 lastDiscover_ = 0;
 };
 
 }  // namespace ns

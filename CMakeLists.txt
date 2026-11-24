@@ -58,6 +58,7 @@ add_executable(netstorm
   src/app/Viewer.cpp
   src/app/WorldView.cpp
   src/app/Frontend.cpp
+  src/app/FrontendSetup.cpp
   src/app/main.cpp
 )
 target_link_libraries(netstorm PRIVATE nscore)

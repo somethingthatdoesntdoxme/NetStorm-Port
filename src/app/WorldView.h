@@ -62,6 +62,7 @@ class WorldView {
   bool lockstep() const { return bool(netTick); }
   // Command-only bot for the local player (LAN-safe "AI plays for me"; used by tests).
   bool autopilot = false;
+  std::string netStatus;  // shown over the battle (waiting for players, desync, connection lost)
   bool abortRequested = false, restartRequested = false;  // from script buttons
   SDL_Color colourOf(int owner) const;
   bool paused = false;

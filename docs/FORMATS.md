@@ -185,7 +185,10 @@ Land is mostly generated, not stored: objects flagged `createsisland`
 (geysers, archers, cannons, blockers, batteries...) grow their own small
 island; `island` objects are 3x3 pre-drawn islands. Player home islands
 appear to be generated from the territory record (terrain builder, not yet
-ported).
+ported). Territory records are `a` (= territory index), `flags` (9 = used),
+`b`, `c`. `b`/`c` range 0-255 but are NOT fort centres: using them as such puts
+The War Begins' forts ~94 cells apart (footage shows them adjacent) and two
+Surrounded forts 4 cells apart. Possibly generator seeds; unresolved.
 
 ## Palettes
 

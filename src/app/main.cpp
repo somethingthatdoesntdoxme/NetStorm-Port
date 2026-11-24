@@ -61,7 +61,8 @@ int main(int argc, char** argv) {
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
-  std::string lanHostCfg, lanJoin, lanName = "Player";
+  std::string lanHostCfg, lanJoin, lanName = "Player", relayAddr, roomCode;
+  int relayPort = 27102;
   int lanPort = ns::LanSession::kPort;
   bool autopilot = false;
   std::string sayText;
@@ -95,6 +96,9 @@ int main(int argc, char** argv) {
     else if (a == "--lan-port") lanPort = std::atoi(next().c_str());
     else if (a == "--name") lanName = next();
     else if (a == "--autopilot") autopilot = true;
+    else if (a == "--relay") relayAddr = next();  // host/join through a netstorm-relay server
+    else if (a == "--relay-port") relayPort = std::atoi(next().c_str());
+    else if (a == "--room") roomCode = next();
     else if (a == "--drop-at") dropAt = std::atof(next().c_str());  // test: lose the connection at this game time
     else if (a == "--say") sayText = next();  // test hook: send one chat line once the battle runs
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
@@ -210,7 +214,7 @@ int main(int argc, char** argv) {
     state = State::Game;
     currentMission.clear();
   };
-  if (!lanHostCfg.empty() || !lanJoin.empty()) {
+  if (!lanHostCfg.empty() || !lanJoin.empty() || !roomCode.empty()) {
     std::string lerr;
     bool ok;
     if (!lanHostCfg.empty()) {
@@ -222,7 +226,10 @@ int main(int argc, char** argv) {
         cfg.slots[i].kind = lanHostCfg[i] == 'A' ? ns::SkirmishSlot::AI : ns::SkirmishSlot::Human;
         cfg.slots[i].fury = furies[i % 3];
       }
-      ok = lan.host(lanName, cfg, uint16_t(lanPort), &lerr);
+      ok = relayAddr.empty() ? lan.host(lanName, cfg, uint16_t(lanPort), &lerr)
+                             : lan.hostViaRelay(relayAddr, lanName, cfg, uint16_t(relayPort), &lerr);
+    } else if (!roomCode.empty()) {
+      ok = lan.joinRoom(relayAddr.empty() ? "127.0.0.1" : relayAddr, roomCode, lanName, uint16_t(relayPort), &lerr);
     } else {
       ok = lan.join(lanJoin, lanName, uint16_t(lanPort), &lerr);
     }
@@ -232,8 +239,14 @@ int main(int argc, char** argv) {
     }
     // Lobby: wait (up to 60 s) for everyone, then start.
     Uint64 t0 = SDL_GetTicks64();
+    bool codeShown = false;
     while (SDL_GetTicks64() - t0 < 60000) {
       lan.poll();
+      if (!codeShown && !lan.roomCode().empty() && lan.role() == ns::LanSession::Role::Host) {
+        std::printf("LAN: room code %s\n", lan.roomCode().c_str());
+        std::fflush(stdout);
+        codeShown = true;
+      }
       if (lan.role() == ns::LanSession::Role::Host && lan.humansWaiting() == 0) lan.start();
       if (lan.justStarted()) break;
       if (lan.state() == ns::LanSession::State::Ended) break;

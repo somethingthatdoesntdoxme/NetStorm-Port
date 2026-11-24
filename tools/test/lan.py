@@ -17,7 +17,8 @@ tmp = "/tmp" if os.name != "nt" else os.environ.get("TEMP", ".")
 
 
 def peer(args, tag, port, seconds):
-    return subprocess.Popen([a.bin, "--data", a.data, *args, "--lan-port", str(port), "--name", tag, "--autopilot",
+    return subprocess.Popen([a.bin, "--data", a.data, *args, *(["--lan-port", str(port)] if port else []),
+                             "--name", tag, "--autopilot",
                              "--simulate", str(seconds), "--validate", "--json", "--hash-every", "30",
                              "--screenshot", os.path.join(tmp, f"lan_{tag}.bmp"), "--size", "320x240"],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
@@ -76,6 +77,41 @@ def case(name, layout, clients, port, kill_after=None, seconds=None, extra_last=
     return ok
 
 
+def relay_case(name, port):
+    """Host and client meet through a netstorm-relay (no port forwarding); the client
+    also loses its connection mid-battle and must rejoin the room and replay."""
+    relay_bin = os.path.join(os.path.dirname(a.bin), "netstorm-relay" + (".exe" if os.name == "nt" else ""))
+    relay = subprocess.Popen([relay_bin, "--port", str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True)
+    time.sleep(0.5)
+    host = peer(["--host", "HHA", "--relay", "127.0.0.1", "--relay-port", str(port), "--say", "relay works"],
+                "host", 0, a.seconds)
+    code, lines = None, []
+    t0 = time.time()
+    while code is None and time.time() - t0 < 20:
+        line = host.stdout.readline()
+        lines.append(line)
+        m = re.search(r"room code ([A-Z]+)", line)
+        if m:
+            code = m.group(1)
+    if not code:
+        host.kill(), relay.kill()
+        print(f"{name:<34} FAIL  no room code from the relay")
+        return False
+    client = peer(["--room", code, "--relay", "127.0.0.1", "--relay-port", str(port), "--drop-at", "50"], "c0", 0,
+                  a.seconds)
+    outs = ["".join(lines) + host.communicate(timeout=a.seconds * 3 + 180)[0],
+            client.communicate(timeout=a.seconds * 3 + 180)[0]]
+    relay.kill()
+    (rh, hh, _), (rc, hc, _) = parse(outs[0]), parse(outs[1])
+    ok = rh and rc and rh["hash"] == rc["hash"] and hh == hc and "rejoined" in outs[1] and "CHAT host: relay works" in outs[1]
+    print(f"{name:<34} {'OK' if ok else 'FAIL'}  room {code}" + (f", {len(hh)} matching checkpoints, rejoin + chat" if ok else ""))
+    if not ok:
+        for o, who in zip(outs, ["host", "client"]):
+            print(f"--- {who} (tail)\n" + "\n".join(o.splitlines()[-8:]))
+    return bool(ok)
+
+
 results = [
     case("2 humans + 1 AI", "HHA", 1, 27310),
     case("3 humans", "HHH", 2, 27320),
@@ -83,5 +119,6 @@ results = [
     case("client drops mid-battle", "HHHA", 2, 27330, kill_after=1.5, seconds=900),
     case("connection lost, rejoin + replay", "HHA", 1, 27340, extra_last=("--drop-at", "60")),
     case("chat reaches everyone", "HHH", 2, 27350, extra_last=("--say", "gg all"), expect_chat="CHAT c1: gg all"),
+    relay_case("through a relay (no port forwarding)", 27360),
 ]
 sys.exit(0 if all(results) else 1)

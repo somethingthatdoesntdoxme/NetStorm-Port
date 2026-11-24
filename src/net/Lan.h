@@ -9,6 +9,7 @@
 // a mismatch is reported as a desync instead of silently drifting apart.
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -37,6 +38,12 @@ class LanSession {
   // Hosting: we are player 1; the config's other Human slots are filled by joiners.
   bool host(const std::string& name, const SkirmishConfig& cfg, uint16_t port = kPort, std::string* err = nullptr);
   bool join(const std::string& address, const std::string& name, uint16_t port = kPort, std::string* err = nullptr);
+  // Internet play without port forwarding, through a netstorm-relay server.
+  bool hostViaRelay(const std::string& relayAddr, const std::string& name, const SkirmishConfig& cfg,
+                    uint16_t relayPort = 27102, std::string* err = nullptr);
+  bool joinRoom(const std::string& relayAddr, const std::string& code, const std::string& name,
+                uint16_t relayPort = 27102, std::string* err = nullptr);
+  const std::string& roomCode() const { return roomCode_; }  // host via relay: give this to your friends
   void leave();
 
   void poll();  // every frame: network IO, lobby, turn assembly
@@ -81,14 +88,31 @@ class LanSession {
   std::vector<Found> found;
 
  private:
+  // A player connected to us (the host): directly over TCP, or through a relay
+  // (then `relayId` names them on our one relay connection).
   struct Peer {
     net::Tcp tcp;
+    int relayId = -1;
+    net::Tcp* relay = nullptr;
+    std::deque<std::vector<uint8_t>> inbox;  // relayed frames waiting to be handled
+    bool closed = false;
     int player = 0;
     std::string name;
     bool hello = false;
+    void send(const std::vector<uint8_t>& m);
+    bool receive(std::vector<uint8_t>& m);
+    void pump() {
+      if (relayId < 0) tcp.pump();
+    }
+    bool failed() const { return relayId >= 0 ? closed : tcp.failed(); }
+    bool open() const { return relayId >= 0 ? !closed : tcp.open(); }
+    void close();
   };
   void tryReconnect();
   void sendHello();
+  void pollRelay();
+  net::Tcp relay_;            // host: our connection to the relay
+  std::string roomCode_;      // host: our room; client: the room we joined (for reconnecting)
   uint32_t session_ = 0;  // identifies this battle (for rejoining)
   std::map<uint32_t, std::vector<Command>> history_;  // host: every finished turn, for rejoiners
   std::array<bool, 9> away_{};

@@ -85,7 +85,8 @@ class Frontend {
   SkirmishConfig setup_;
   bool lanMode_ = false, skirmishResult_ = false;
   std::string addr_ = "127.0.0.1", name_ = "Player";
-  int editing_ = 0;  // 0 none, 1 name, 2 address, 3 lobby chat
+  int editing_ = 0;  // 0 none, 1 name, 2 address, 3 lobby chat, 4 relay address, 5 room code
+  std::string relay_ = "", room_;
   std::string chatInput_;
   Uint64 lastDiscover_ = 0;
 };

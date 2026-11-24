@@ -1,5 +1,7 @@
 #include "net/Lan.h"
 
+#include "net/Relay.h"
+
 #include <algorithm>
 #include <chrono>
 #include <random>
@@ -77,7 +79,102 @@ struct R {
 };
 }  // namespace
 
+// ---- Peers (direct or relayed) ----------------------------------------------------------
+
+void LanSession::Peer::send(const std::vector<uint8_t>& m) {
+  if (relayId < 0) return tcp.send(m);
+  if (closed || !relay) return;
+  std::vector<uint8_t> f{relay::RData};
+  for (int i = 0; i < 4; ++i) f.push_back(uint8_t(uint32_t(relayId) >> (8 * i)));
+  f.insert(f.end(), m.begin(), m.end());
+  relay->send(f);
+}
+
+bool LanSession::Peer::receive(std::vector<uint8_t>& m) {
+  if (relayId < 0) return tcp.receive(m);
+  if (inbox.empty()) return false;
+  m = std::move(inbox.front());
+  inbox.pop_front();
+  return true;
+}
+
+void LanSession::Peer::close() {
+  if (relayId < 0) return tcp.close();
+  if (!closed && relay) {
+    std::vector<uint8_t> f{relay::RKick};
+    for (int i = 0; i < 4; ++i) f.push_back(uint8_t(uint32_t(relayId) >> (8 * i)));
+    relay->send(f);
+  }
+  closed = true;
+}
+
 // ---- Setup ----------------------------------------------------------------------
+
+bool LanSession::hostViaRelay(const std::string& relayAddr, const std::string& name, const SkirmishConfig& cfg,
+                              uint16_t relayPort, std::string* err) {
+  leave();
+  if (!relay_.connect(relayAddr, relayPort, err)) return false;
+  relay_.send({relay::RHost});
+  role_ = Role::Host;
+  state_ = State::Lobby;
+  local_ = 1;
+  myName_ = name;
+  cfg_ = cfg;
+  cfg_.slots[0].kind = SkirmishSlot::Human;
+  names = {};
+  names[0] = name;
+  status = "opening a room on " + relayAddr + "...";
+  return true;
+}
+
+bool LanSession::joinRoom(const std::string& relayAddr, const std::string& code, const std::string& name,
+                          uint16_t relayPort, std::string* err) {
+  leave();
+  if (!server_.connect(relayAddr, relayPort, err)) return false;
+  role_ = Role::Client;
+  state_ = State::Connecting;
+  myName_ = name;
+  addr_ = relayAddr;
+  port_ = relayPort;
+  roomCode_ = code;
+  W j(Msg(relay::RJoin));
+  j.str(code);
+  server_.send(j.b);
+  sendHello();  // the relay passes it on once we're in the room
+  status = "joining room " + code;
+  return true;
+}
+
+void LanSession::pollRelay() {
+  relay_.pump();
+  std::vector<uint8_t> m;
+  while (relay_.receive(m)) {
+    if (m.empty()) continue;
+    R r(m);
+    if (m[0] == relay::RRoom) {
+      roomCode_ = r.str();
+      status = "room code " + roomCode_ + " - tell your friends";
+    } else if (m[0] == relay::ROpen) {
+      auto p = std::make_unique<Peer>();
+      p->relayId = int(r.u32());
+      p->relay = &relay_;
+      peers_.push_back(std::move(p));
+    } else if (m[0] == relay::RData || m[0] == relay::RClose) {
+      int id = int(r.u32());
+      for (auto& p : peers_)
+        if (p->relayId == id) {
+          if (m[0] == relay::RClose) p->closed = true;
+          else p->inbox.emplace_back(m.begin() + 5, m.end());
+        }
+    }
+  }
+  if (relay_.failed() && !roomCode_.empty()) {
+    status = "lost the connection to the relay";
+    for (auto& p : peers_)
+      if (p->relayId >= 0) p->closed = true;
+    roomCode_.clear();
+  }
+}
 
 bool LanSession::host(const std::string& name, const SkirmishConfig& cfg, uint16_t port, std::string* err) {
   leave();
@@ -125,6 +222,8 @@ void LanSession::say(const std::string& text) {
 }
 
 void LanSession::leave() {
+  relay_.close();
+  roomCode_.clear();
   session_ = 0;
   history_.clear();
   away_ = {};
@@ -171,7 +270,7 @@ void LanSession::setConfig(const SkirmishConfig& c) {
   for (auto& p : peers_)
     if (p->player && n.slots[size_t(p->player - 1)].kind != SkirmishSlot::Human) {
       names[size_t(p->player - 1)].clear();
-      p->tcp.send(W(Reject).str("the host closed your slot").b);
+      p->send(W(Reject).str("the host closed your slot").b);
       p->player = 0;
     }
   cfg_ = n;
@@ -204,7 +303,7 @@ bool LanSession::justStarted() {
 
 void LanSession::sendAll(const std::vector<uint8_t>& msg) {
   for (auto& p : peers_)
-    if (p->hello) p->tcp.send(msg);
+    if (p->hello) p->send(msg);
 }
 
 void LanSession::discover() {
@@ -240,6 +339,7 @@ void LanSession::answerDiscovery() {
 void LanSession::poll() {
   answerDiscovery();
   if (role_ == Role::Host) {
+    if (relay_.open() || relay_.failed()) pollRelay();
     net::Tcp c;
     while (listen_.accept(c)) {
       auto p = std::make_unique<Peer>();
@@ -248,12 +348,12 @@ void LanSession::poll() {
     }
     for (size_t i = 0; i < peers_.size(); ++i) {
       Peer& p = *peers_[i];
-      p.tcp.pump();
+      p.pump();
       std::vector<uint8_t> m;
-      while (p.tcp.receive(m)) handle(&p, m);
-      if (p.tcp.failed()) dropPeer(p, "lost connection");
+      while (p.receive(m)) handle(&p, m);
+      if (p.failed()) dropPeer(p, "lost connection");
     }
-    peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [](auto& p) { return !p->tcp.open(); }), peers_.end());
+    peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [](auto& p) { return !p->open(); }), peers_.end());
     for (int pl = 2; pl <= 8 && state_ == State::Playing; ++pl)
       if (away_[size_t(pl)] && nowMs() > awayUntil_[size_t(pl)]) {
         away_[size_t(pl)] = false;
@@ -264,7 +364,8 @@ void LanSession::poll() {
         status = "player " + std::to_string(pl) + " didn't come back and has surrendered";
       }
     tryFinalize();
-    for (auto& p : peers_) p->tcp.pump();
+    for (auto& p : peers_) p->pump();
+    relay_.pump();
   } else if (role_ == Role::Client) {
     server_.pump();
     std::vector<uint8_t> m;
@@ -298,12 +399,19 @@ void LanSession::tryReconnect() {
   if (t < nextRetry_) return;
   nextRetry_ = t + 3000;
   std::string err;
-  if (server_.connect(addr_, port_, &err)) sendHello();
+  if (server_.connect(addr_, port_, &err)) {
+    if (!roomCode_.empty()) {  // through a relay: back into the room first
+      W j(Msg(relay::RJoin));
+      j.str(roomCode_);
+      server_.send(j.b);
+    }
+    sendHello();
+  }
 }
 
 void LanSession::dropPeer(Peer& p, const std::string& why) {
   int pl = p.player;
-  p.tcp.close();
+  p.close();
   if (!pl) return;
   names[size_t(pl - 1)].clear();
   if (state_ == State::Lobby) {
@@ -321,6 +429,13 @@ void LanSession::dropPeer(Peer& p, const std::string& why) {
 
 void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
   if (m.empty()) return;
+  if (!from && m[0] == relay::RJoined) return;
+  if (!from && m[0] == relay::RNoRoom) {
+    status = "no room with that code";
+    state_ = State::Ended;
+    reconnecting_ = false;
+    return;
+  }
   R r(m);
   switch (Msg(m[0])) {
     case Hello: {  // host <- client
@@ -330,8 +445,8 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
       uint32_t session = r.u32();
       int seat = r.u8();
       if (!r.ok || proto != kProtocol) {
-        from->tcp.send(W(Reject).str("different game version").b);
-        from->tcp.close();
+        from->send(W(Reject).str("different game version").b);
+        from->close();
         return;
       }
       if (state_ == State::Playing && session == session_ && seat >= 2 && seat <= 8 && away_[size_t(seat)]) {
@@ -341,28 +456,28 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
         from->name = name;
         names[size_t(seat - 1)] = name;
         away_[size_t(seat)] = false;
-        from->tcp.send(W(Welcome).u8(uint8_t(seat)).b);
-        from->tcp.send(W(Start).str(cfg_.encode()).u32(session_).b);
-        for (auto& [turn, cs] : history_) from->tcp.send(W(Turn).u32(turn).cmds(cs).b);
+        from->send(W(Welcome).u8(uint8_t(seat)).b);
+        from->send(W(Start).str(cfg_.encode()).u32(session_).b);
+        for (auto& [turn, cs] : history_) from->send(W(Turn).u32(turn).cmds(cs).b);
         status = name + " is back - catching up";
         return;
       }
       if (state_ != State::Lobby) {
-        from->tcp.send(W(Reject).str("the battle has already started").b);
+        from->send(W(Reject).str("the battle has already started").b);
         return;
       }
       int slot = -1;
       for (int i = 1; i < 8 && slot < 0; ++i)
         if (cfg_.slots[size_t(i)].kind == SkirmishSlot::Human && names[size_t(i)].empty()) slot = i;
       if (slot < 0) {
-        from->tcp.send(W(Reject).str("no free player slot").b);
+        from->send(W(Reject).str("no free player slot").b);
         return;
       }
       from->hello = true;
       from->player = slot + 1;
       from->name = name.empty() ? "Player " + std::to_string(slot + 1) : name.substr(0, 24);
       names[size_t(slot)] = from->name;
-      from->tcp.send(W(Welcome).u8(uint8_t(from->player)).b);
+      from->send(W(Welcome).u8(uint8_t(from->player)).b);
       sendAll(lobbyMsg());
       break;
     }

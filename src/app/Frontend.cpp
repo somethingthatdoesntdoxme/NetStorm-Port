@@ -136,14 +136,18 @@ void Frontend::navigate(const std::string& go) {
     layoutLan();
     return;
   }
-  if (go == "host" || go.rfind("join:", 0) == 0) {
+  if (go == "host" || go == "relayhost" || go.rfind("join:", 0) == 0 || go == "joinroom") {
     std::string err;
     bool ok = false;
-    if (lan_ && go == "host") {
+    if (lan_ && (go == "host" || go == "relayhost")) {
       SkirmishConfig c = setup_.players() >= 2 ? setup_ : SkirmishConfig{};
       c.slots[0] = {SkirmishSlot::Human, c.slots[0].fury.empty() ? "rain" : c.slots[0].fury, c.slots[0].team, ""};
       if (c.players() < 2) c.slots[1] = {SkirmishSlot::Human, "thunder", 0, ""};  // one open seat by default
-      ok = lan_->host(name_, c, LanSession::kPort, &err);
+      if (go == "relayhost" && relay_.empty()) err = "type the relay server's address first";
+      else ok = go == "host" ? lan_->host(name_, c, LanSession::kPort, &err) : lan_->hostViaRelay(relay_, name_, c, 27102, &err);
+    } else if (lan_ && go == "joinroom") {
+      if (relay_.empty() || room_.empty()) err = "type the relay address and the room code";
+      else ok = lan_->joinRoom(relay_, room_, name_, 27102, &err);
     } else if (lan_) {
       ok = lan_->join(go.substr(5), name_, LanSession::kPort, &err);
     }
@@ -278,15 +282,16 @@ FrontendAction Frontend::handle(const SDL_Event& e) {
       return {};
     }
   }
-  if (editing_ && e.type == SDL_TEXTINPUT) {
-    std::string& f = editing_ == 1 ? name_ : addr_;
+  auto field = [&]() -> std::string& { return editing_ == 1 ? name_ : editing_ == 4 ? relay_ : editing_ == 5 ? room_ : addr_; };
+  if (editing_ && editing_ != 3 && e.type == SDL_TEXTINPUT) {
+    std::string& f = field();
     for (const char* c = e.text.text; *c; ++c)
       if (f.size() < 40 && *c >= 32 && *c < 127) f += *c;
     layoutLan();
     return {};
   }
-  if (editing_ && e.type == SDL_KEYDOWN) {
-    std::string& f = editing_ == 1 ? name_ : addr_;
+  if (editing_ && editing_ != 3 && e.type == SDL_KEYDOWN) {
+    std::string& f = field();
     if (e.key.keysym.sym == SDLK_BACKSPACE && !f.empty()) f.pop_back();
     if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_ESCAPE) {
       editing_ = 0;
@@ -320,7 +325,7 @@ FrontendAction Frontend::handle(const SDL_Event& e) {
     if (b.go.empty()) return {};  // read-only (e.g. a client in the lobby)
     if (screen_ == Screen::Setup && b.go != "title") return setupClick(b.go);
     if (b.go.rfind("edit:", 0) == 0) {
-      editing_ = b.go == "edit:name" ? 1 : 2;
+      editing_ = b.go == "edit:name" ? 1 : b.go == "edit:relay" ? 4 : b.go == "edit:room" ? 5 : 2;
       SDL_StartTextInput();
       layoutLan();
       return {};

@@ -87,7 +87,9 @@ void Frontend::drawSetup() {
                              : "CLICK TO CHANGE: OPPONENTS, FURIES, TEAMS";
   drawText(ren, x, 100, 2, sub, kGrey);
   if (lanMode_ && lan_ && !lan_->status.empty()) drawText(ren, x, float(sh) - 130, 2, upper(lan_->status), kWhite);
-  if (lanMode_ && lan_ && lan_->role() == LanSession::Role::Host)
+  if (lanMode_ && lan_ && !lan_->roomCode().empty())
+    drawText(ren, x + 620, 40, 4, "ROOM " + lan_->roomCode(), kGreen);
+  if (lanMode_ && lan_ && lan_->role() == LanSession::Role::Host && lan_->roomCode().empty())
     drawText(ren, x, float(sh) - 110, 2,
              "OTHERS JOIN FROM LAN GAME ON THEIR MACHINE (INTERNET: FORWARD TCP PORT " +
                  std::to_string(LanSession::kPort) + ")",
@@ -194,6 +196,14 @@ void Frontend::layoutLan() {
   y += 20;
   addButton({x, y, 580, 44}, "ADDRESS: " + addr_ + (editing_ == 2 ? "_" : ""), "edit:addr");
   addButton({x + 600, y, 200, 44}, "JOIN", "join:" + addr_);
+  // Internet without port forwarding: everyone meets on a netstorm-relay server.
+  y += 76;
+  addButton({x, y, 580, 44}, "RELAY: " + (relay_.empty() && editing_ != 4 ? std::string("(SERVER ADDRESS)") : relay_) +
+                                (editing_ == 4 ? "_" : ""), "edit:relay");
+  addButton({x + 600, y, 200, 44}, "HOST ROOM", "relayhost");
+  y += 52;
+  addButton({x, y, 580, 44}, "ROOM CODE: " + upper(room_) + (editing_ == 5 ? "_" : ""), "edit:room");
+  addButton({x + 600, y, 200, 44}, "JOIN ROOM", "joinroom");
   addButton({30, float(sh) - 70, 200, 44}, "BACK", "title");
 }
 
@@ -205,8 +215,9 @@ void Frontend::drawLan() {
   drawText(ren, x, 40, 5, "LAN / INTERNET BATTLE", kGold);
   drawText(ren, x, 100, 2, "BATTLES ON YOUR NETWORK SHOW UP BELOW. OR TYPE THE HOST'S ADDRESS.", kGrey);
   if (lan_ && lan_->found.empty()) drawText(ren, x, 296, 2, "LOOKING FOR BATTLES ON YOUR NETWORK...", kGrey);
-  if (lan_ && !lan_->status.empty() && lan_->state() == LanSession::State::Ended)
+  if (lan_ && !lan_->status.empty() && (lan_->state() == LanSession::State::Ended || lan_->role() == LanSession::Role::None))
     drawText(ren, x, float(sh) - 130, 2, upper(lan_->status), kRed);
+  drawText(ren, x, float(sh) - 106, 2, "NO PORT FORWARDING? EVERYONE USES THE SAME RELAY SERVER (NETSTORM-RELAY)", kGrey);
   // Re-ask the network every couple of seconds.
   if (lan_ && lan_->role() == LanSession::Role::None && SDL_GetTicks64() - lastDiscover_ > 2000) {
     lastDiscover_ = SDL_GetTicks64();

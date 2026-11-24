@@ -183,5 +183,9 @@ the engine's island placement (an approximation) puts the player's start inside 
   2-turn input delay, state hash every 10 turns, disconnect = surrender, protocol versioning), LAN browser, lobby
   (live seats/names), in-battle network status, skirmish/LAN results screen.
 - Tests: tools/test/lan.py (2 humans + AI, 3 humans, client killed mid-battle) via the command-only autopilot.
-- Next: internet play without port forwarding (relay or NAT punch-through), in-game chat, reconnect after a drop,
-  AI tuning for generated maps (homes have one geyser: economies are tight).
+- Relay server (src/relay, netstorm-relay): rooms with 5-letter codes; host and clients connect out, frames are
+  passed through unchanged (net/Relay.h). Chat in lobby and battle. Reconnect: a dropped player's seat is kept 3 min,
+  the host replays the turn history to them (lockstep = replaying orders recreates the exact state), fast-forward.
+- Tests (tools/test/lan.py): 2 humans + AI, 3 humans, client killed, connection lost + rejoin + replay, chat, relay
+  with a mid-battle drop and rejoin through the relay.
+- Next: AI tuning for generated maps (homes have one geyser: economies are tight).

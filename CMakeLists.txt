@@ -104,3 +104,12 @@ endif()
 if(WIN32)
   target_link_libraries(nscore PUBLIC ws2_32)
 endif()
+
+# ---- relay server (no SDL): internet play without port forwarding ----
+add_executable(netstorm-relay src/relay/RelayMain.cpp)
+target_link_libraries(netstorm-relay PRIVATE nscore)
+target_include_directories(netstorm-relay PRIVATE src)
+find_package(Threads)
+if(Threads_FOUND)
+  target_link_libraries(netstorm-relay PRIVATE Threads::Threads)
+endif()

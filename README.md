@@ -76,3 +76,19 @@ docs/        format notes
   Windows, Linux and Steam Deck players can play together. Desyncs are detected and shown; a player who drops out
   surrenders and the battle carries on.
 - Test it yourself: `tools/test/lan.py --data <install>` plays real host/client processes against each other.
+
+### Internet play without port forwarding (relay)
+
+Everyone connects *out* to a small relay server, so nobody needs to touch their router:
+
+1. Run `netstorm-relay` (built alongside the game, no graphics, tiny) on any machine everyone can reach - a cheap VPS
+   is ideal; a home machine works if that one person forwards **TCP 27102** once.
+2. Host: *LAN / Internet* -> type the relay's address in **RELAY** -> **HOST ROOM**. The lobby shows a 5-letter room code.
+3. Friends: type the same relay address and the **ROOM CODE** -> **JOIN ROOM**.
+
+### Chat and reconnecting
+
+- Press **Enter** to chat, in the lobby and in battle.
+- If someone's connection drops, their army stands idle and their seat is kept for 3 minutes; their game reconnects
+  by itself (directly or through the relay), replays the battle from the start to catch up, and carries on.
+  If they don't make it back in time, their army surrenders.

@@ -26,6 +26,10 @@ class Tcp {
   bool open() const { return fd_ >= 0 && !failed_; }
   bool failed() const { return failed_; }
   void close();
+  void abort() {  // drop the connection as if the network failed (tests)
+    close();
+    failed_ = true;
+  }
 
   // Framed messages: u32 length (LE) + payload. pump() moves bytes both ways.
   void send(const std::vector<uint8_t>& payload);

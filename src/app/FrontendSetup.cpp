@@ -92,6 +92,17 @@ void Frontend::drawSetup() {
              "OTHERS JOIN FROM LAN GAME ON THEIR MACHINE (INTERNET: FORWARD TCP PORT " +
                  std::to_string(LanSession::kPort) + ")",
              kGrey);
+  // Lobby chat (right-hand side of the bottom area).
+  if (lanMode_ && lan_) {
+    float cx = x, cy = float(sh) - 250;
+    drawText(ren, cx, cy, 2, editing_ == 3 ? "SAY: " + upper(chatInput_) + "_" : "PRESS ENTER TO CHAT", editing_ == 3 ? kGold : kGrey);
+    int shown = 0;
+    for (size_t i = lan_->chat.size(); i-- > 0 && shown < 4; ++shown) {
+      auto& c = lan_->chat[i];
+      drawText(ren, cx, cy - 24.0f * float(shown + 1), 2, upper(c.name + ": " + c.text),
+               c.player == lan_->localPlayer() ? SDL_Color{150, 210, 255, 255} : kWhite);
+    }
+  }
   // Fury colour chips next to the fury buttons.
   for (auto& b : buttons_)
     if (b.go.find(":fury") != std::string::npos || (client && (b.label == "RAIN" || b.label == "WIND" ||

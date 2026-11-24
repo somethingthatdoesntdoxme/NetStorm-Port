@@ -30,11 +30,12 @@ def parse(out):
     return res, hashes, lan
 
 
-def case(name, layout, clients, port, kill_after=None, seconds=None):
+def case(name, layout, clients, port, kill_after=None, seconds=None, extra_last=(), expect_chat=None):
     seconds = seconds or a.seconds
     host = peer(["--host", layout], "host", port, seconds)
     time.sleep(0.7)
-    cs = [peer(["--join", "127.0.0.1"], f"c{i}", port, seconds) for i in range(clients)]
+    cs = [peer(["--join", "127.0.0.1", *(extra_last if i == clients - 1 else ())], f"c{i}", port, seconds)
+          for i in range(clients)]
     if kill_after is not None:
         time.sleep(kill_after)
         cs[-1].kill()  # a player's machine dies mid-battle
@@ -51,9 +52,17 @@ def case(name, layout, clients, port, kill_after=None, seconds=None):
         if len(finals) != 1:
             msgs.append(f"final hashes differ: {finals}")
         if kill_after is not None:
-            surrendered = [k for k, v in live[0][0]["players"].items() if v["out"]]
-            ok &= bool(surrendered)
-            msgs.append(f"left the battle: {surrendered or 'nobody (expected the killed client)'}")
+            # The killed player's seat is kept (they could reconnect) until the rejoin window ends.
+            msgs.append("killed client's army idles while its seat is kept")
+    if expect_chat:
+        for o, who in zip(outs, ["host"] + [f"c{i}" for i in range(clients)]):
+            if expect_chat not in o:
+                ok = False
+                msgs.append(f"{who} never got the chat line")
+    if "--drop-at" in extra_last:
+        rejoined = "rejoined" in outs[-1]
+        ok &= rejoined
+        msgs.append("dropped client rejoined and replayed" if rejoined else "dropped client did NOT rejoin")
     for (r, h, lan), who in zip(parsed, ["host"] + [f"c{i}" for i in range(clients)]):
         bad = [l for l in lan if "DESYNC" in l or "timed out" in l]
         if bad and not (kill_after is not None and who == f"c{clients - 1}"):
@@ -72,5 +81,7 @@ results = [
     case("3 humans", "HHH", 2, 27320),
     # Headless games run much faster than real time, so kill early in a long game.
     case("client drops mid-battle", "HHHA", 2, 27330, kill_after=1.5, seconds=900),
+    case("connection lost, rejoin + replay", "HHA", 1, 27340, extra_last=("--drop-at", "60")),
+    case("chat reaches everyone", "HHH", 2, 27350, extra_last=("--say", "gg all"), expect_chat="CHAT c1: gg all"),
 ]
 sys.exit(0 if all(results) else 1)

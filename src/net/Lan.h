@@ -28,7 +28,8 @@ class LanSession {
   static constexpr uint32_t kTicksPerTurn = 4;       // 200 ms turns at 20 ticks/s
   static constexpr uint32_t kDelayTurns = 2;         // orders take effect 2 turns later
   static constexpr uint32_t kHashEvery = 10;         // turns between desync checks
-  static constexpr uint32_t kProtocol = 1;
+  static constexpr uint32_t kProtocol = 2;
+  static constexpr int kRejoinSeconds = 180;  // a dropped player's seat is kept this long
 
   enum class Role { None, Host, Client };
   enum class State { Idle, Connecting, Lobby, Playing, Ended };
@@ -55,6 +56,18 @@ class LanSession {
   void issue(const Command& c);
   bool tickCommands(uint32_t tick, const std::function<uint64_t()>& stateHash, std::vector<Command>& out);
 
+  // Chat (lobby and battle). Never touches the simulation.
+  struct ChatLine {
+    int player;
+    std::string name, text;
+  };
+  std::vector<ChatLine> chat;
+  void say(const std::string& text);
+  // Complete turns waiting to be simulated: a rejoining player fast-forwards through these.
+  size_t backlog() const { return turns_.size(); }
+  bool reconnecting() const { return reconnecting_; }
+  void debugDropConnection() { server_.abort(); }  // tests: simulate a network failure
+
   std::string status;  // human-readable: "waiting for Alice", "connection lost"...
   bool desync = false;
 
@@ -74,6 +87,16 @@ class LanSession {
     std::string name;
     bool hello = false;
   };
+  void tryReconnect();
+  void sendHello();
+  uint32_t session_ = 0;  // identifies this battle (for rejoining)
+  std::map<uint32_t, std::vector<Command>> history_;  // host: every finished turn, for rejoiners
+  std::array<bool, 9> away_{};
+  std::array<int64_t, 9> awayUntil_{};
+  bool reconnecting_ = false;
+  int64_t nextRetry_ = 0, giveUpAt_ = 0;
+  std::string addr_;
+  uint16_t port_ = kPort;
   void sendAll(const std::vector<uint8_t>& msg);
   void handle(Peer* from, const std::vector<uint8_t>& msg);
   void addBatch(uint32_t turn, int player, const std::vector<Command>& cmds);

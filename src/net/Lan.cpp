@@ -1,12 +1,19 @@
 #include "net/Lan.h"
 
 #include <algorithm>
+#include <chrono>
+#include <random>
 #include <sstream>
 
 namespace ns {
 
 namespace {
-enum Msg : uint8_t { Hello = 1, Welcome, Lobby, Start, Cmds, Turn, Hash, Desync, Reject };
+enum Msg : uint8_t { Hello = 1, Welcome, Lobby, Start, Cmds, Turn, Hash, Desync, Reject, Chat };
+
+int64_t nowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 struct W {
   std::vector<uint8_t> b;
@@ -94,12 +101,36 @@ bool LanSession::join(const std::string& address, const std::string& name, uint1
   role_ = Role::Client;
   state_ = State::Connecting;
   myName_ = name;
-  server_.send(W(Hello).u32(kProtocol).str(name).b);
+  addr_ = address;
+  port_ = port;
+  sendHello();
   status = "connecting to " + address;
   return true;
 }
 
+void LanSession::sendHello() {
+  // session/player are 0 for a new player; set when coming back after a drop.
+  server_.send(W(Hello).u32(kProtocol).str(myName_).u32(session_).u8(uint8_t(session_ ? local_ : 0)).b);
+}
+
+void LanSession::say(const std::string& text) {
+  if (text.empty() || role_ == Role::None) return;
+  std::string t = text.substr(0, 120);
+  if (role_ == Role::Host) {
+    chat.push_back({local_, myName_, t});
+    sendAll(W(Chat).u8(uint8_t(local_)).str(myName_).str(t).b);
+  } else {
+    server_.send(W(Chat).u8(0).str("").str(t).b);
+  }
+}
+
 void LanSession::leave() {
+  session_ = 0;
+  history_.clear();
+  away_ = {};
+  awayUntil_ = {};
+  reconnecting_ = false;
+  chat.clear();
   peers_.clear();
   listen_.close();
   server_.close();
@@ -157,7 +188,8 @@ bool LanSession::start() {
   required_[1] = true;
   for (auto& p : peers_)
     if (p->player) required_[size_t(p->player)] = true;
-  sendAll(W(Start).str(cfg_.encode()).b);
+  session_ = uint32_t(std::random_device{}()) | 1u;
+  sendAll(W(Start).str(cfg_.encode()).u32(session_).b);
   state_ = State::Playing;
   started_ = true;
   status = "";
@@ -222,6 +254,15 @@ void LanSession::poll() {
       if (p.tcp.failed()) dropPeer(p, "lost connection");
     }
     peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [](auto& p) { return !p->tcp.open(); }), peers_.end());
+    for (int pl = 2; pl <= 8 && state_ == State::Playing; ++pl)
+      if (away_[size_t(pl)] && nowMs() > awayUntil_[size_t(pl)]) {
+        away_[size_t(pl)] = false;
+        Command c;
+        c.type = Command::Surrender;
+        c.player = uint8_t(pl);
+        pending_.push_back(c);  // rides in our (the host's) next batch
+        status = "player " + std::to_string(pl) + " didn't come back and has surrendered";
+      }
     tryFinalize();
     for (auto& p : peers_) p->tcp.pump();
   } else if (role_ == Role::Client) {
@@ -229,11 +270,35 @@ void LanSession::poll() {
     std::vector<uint8_t> m;
     while (server_.receive(m)) handle(nullptr, m);
     if (server_.failed() && state_ != State::Ended) {
-      status = state_ == State::Connecting ? "couldn't reach the host" : "lost connection to the host";
-      state_ = State::Ended;
+      if (state_ == State::Playing && session_ && !reconnecting_) {
+        // Keep the seat: try to get back in, replaying the battle when we do.
+        reconnecting_ = true;
+        giveUpAt_ = nowMs() + kRejoinSeconds * 1000;
+        nextRetry_ = 0;
+        status = "connection lost - reconnecting...";
+      } else if (!reconnecting_) {
+        status = state_ == State::Connecting ? "couldn't reach the host" : "lost connection to the host";
+        state_ = State::Ended;
+      }
     }
+    if (reconnecting_) tryReconnect();
     server_.pump();
   }
+}
+
+void LanSession::tryReconnect() {
+  int64_t t = nowMs();
+  if (t > giveUpAt_) {
+    reconnecting_ = false;
+    state_ = State::Ended;
+    status = "couldn't reconnect to the host";
+    return;
+  }
+  if (server_.open() && !server_.failed()) return;  // attempt in progress
+  if (t < nextRetry_) return;
+  nextRetry_ = t + 3000;
+  std::string err;
+  if (server_.connect(addr_, port_, &err)) sendHello();
 }
 
 void LanSession::dropPeer(Peer& p, const std::string& why) {
@@ -243,14 +308,14 @@ void LanSession::dropPeer(Peer& p, const std::string& why) {
   names[size_t(pl - 1)].clear();
   if (state_ == State::Lobby) {
     sendAll(lobbyMsg());
-  } else if (state_ == State::Playing && required_[size_t(pl)]) {
-    // Their army surrenders; the battle goes on for everyone else.
+  } else if (state_ == State::Playing && (required_[size_t(pl)] || away_[size_t(pl)])) {
+    // Their army stands idle and their seat is kept for a while; the battle goes
+    // on for everyone else. If they don't come back in time, they surrender.
     required_[size_t(pl)] = false;
-    Command c;
-    c.type = Command::Surrender;
-    c.player = uint8_t(pl);
-    pending_.push_back(c);  // rides in our (the host's) next batch
-    status = "player " + std::to_string(pl) + " " + why;
+    away_[size_t(pl)] = true;
+    awayUntil_[size_t(pl)] = nowMs() + kRejoinSeconds * 1000;
+    status = "player " + std::to_string(pl) + " " + why + " - seat kept for " + std::to_string(kRejoinSeconds / 60) +
+             " minutes";
   }
 }
 
@@ -262,9 +327,24 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
       if (!from || from->hello) return;
       uint32_t proto = r.u32();
       std::string name = r.str();
+      uint32_t session = r.u32();
+      int seat = r.u8();
       if (!r.ok || proto != kProtocol) {
         from->tcp.send(W(Reject).str("different game version").b);
         from->tcp.close();
+        return;
+      }
+      if (state_ == State::Playing && session == session_ && seat >= 2 && seat <= 8 && away_[size_t(seat)]) {
+        // Welcome back: send the setup and every turn so far; they replay to catch up.
+        from->hello = true;
+        from->player = seat;
+        from->name = name;
+        names[size_t(seat - 1)] = name;
+        away_[size_t(seat)] = false;
+        from->tcp.send(W(Welcome).u8(uint8_t(seat)).b);
+        from->tcp.send(W(Start).str(cfg_.encode()).u32(session_).b);
+        for (auto& [turn, cs] : history_) from->tcp.send(W(Turn).u32(turn).cmds(cs).b);
+        status = name + " is back - catching up";
         return;
       }
       if (state_ != State::Lobby) {
@@ -300,11 +380,20 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
     }
     case Start: {
       SkirmishConfig c;
-      if (r.ok && SkirmishConfig::decode(r.str(), c)) {
+      std::string text = r.str();
+      uint32_t session = r.u32();
+      if (r.ok && SkirmishConfig::decode(text, c)) {
         for (int i = 0; i < 8; ++i) c.slots[size_t(i)].name = names[size_t(i)];
         cfg_ = c;
+        session_ = session;
         state_ = State::Playing;
         started_ = true;
+        // Fresh lockstep state: the battle (re)starts from turn 0 and replays.
+        turns_.clear();
+        pending_.clear();
+        sealed_ = -1;
+        if (reconnecting_) status = "reconnected - catching up...";
+        reconnecting_ = false;
       }
       break;
     }
@@ -318,6 +407,11 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
       auto cs = r.cmds();
       if (!r.ok) return;
       for (auto& c : cs) c.player = uint8_t(from->player);  // nobody gives orders for someone else
+      if (!required_[size_t(from->player)] && state_ == State::Playing) {
+        if (turn < nextFinal_) return;  // still replaying old turns
+        required_[size_t(from->player)] = true;  // caught up: wait for them again
+        status = from->name + " has caught up";
+      }
       addBatch(turn, from->player, cs);
       break;
     }
@@ -337,6 +431,19 @@ void LanSession::handle(Peer* from, const std::vector<uint8_t>& m) {
         desync = true;
         status = "DESYNC with player " + std::to_string(from->player) + " at turn " + std::to_string(turn);
         sendAll(W(Desync).u32(turn).b);
+      }
+      break;
+    }
+    case Chat: {
+      uint8_t pl = r.u8();
+      std::string name = r.str(), text = r.str().substr(0, 120);
+      if (!r.ok) return;
+      if (role_ == Role::Host) {  // relay with the sender's real seat and name
+        if (!from || !from->player) return;
+        chat.push_back({from->player, from->name, text});
+        sendAll(W(Chat).u8(uint8_t(from->player)).str(from->name).str(text).b);
+      } else {
+        chat.push_back({pl, name, text});
       }
       break;
     }
@@ -371,6 +478,7 @@ void LanSession::tryFinalize() {
     std::vector<Command> merged;  // fixed order: by player, then as issued
     for (auto& [pl, cs] : it->second) merged.insert(merged.end(), cs.begin(), cs.end());
     turns_[nextFinal_] = merged;
+    history_[nextFinal_] = merged;
     sendAll(W(Turn).u32(nextFinal_).cmds(merged).b);
     batches_.erase(it);
     ++nextFinal_;

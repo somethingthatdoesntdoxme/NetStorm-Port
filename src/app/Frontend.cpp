@@ -253,6 +253,31 @@ void Frontend::navigate(const std::string& go) {
 
 FrontendAction Frontend::handle(const SDL_Event& e) {
   // Text boxes on the LAN screen.
+  // Lobby chat: Enter to type, Enter to send.
+  if (screen_ == Screen::Setup && lanMode_ && lan_) {
+    if (editing_ == 3 && e.type == SDL_TEXTINPUT) {
+      for (const char* c = e.text.text; *c; ++c)
+        if (chatInput_.size() < 100 && *c >= 32 && *c < 127) chatInput_ += *c;
+      return {};
+    }
+    if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER)) {
+      if (editing_ == 3) {
+        lan_->say(chatInput_);
+        chatInput_.clear();
+        editing_ = 0;
+        SDL_StopTextInput();
+      } else {
+        editing_ = 3;
+        SDL_StartTextInput();
+      }
+      return {};
+    }
+    if (editing_ == 3 && e.type == SDL_KEYDOWN) {
+      if (e.key.keysym.sym == SDLK_BACKSPACE && !chatInput_.empty()) chatInput_.pop_back();
+      if (e.key.keysym.sym == SDLK_ESCAPE) editing_ = 0, chatInput_.clear(), SDL_StopTextInput();
+      return {};
+    }
+  }
   if (editing_ && e.type == SDL_TEXTINPUT) {
     std::string& f = editing_ == 1 ? name_ : addr_;
     for (const char* c = e.text.text; *c; ++c)

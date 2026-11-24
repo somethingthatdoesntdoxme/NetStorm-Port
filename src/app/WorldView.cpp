@@ -171,6 +171,35 @@ void WorldView::buildTestScene(uint32_t seed) {
   frame(0, 0, float(world.width() * kCellW), float(world.height() * kCellH + 40));
 }
 void WorldView::handle(const SDL_Event& e) {
+  // Chat (LAN battles): Enter opens the line, Enter sends, Esc cancels.
+  if (chatting_) {
+    if (e.type == SDL_TEXTINPUT) {
+      for (const char* c = e.text.text; *c; ++c)
+        if (chatInput_.size() < 100 && *c >= 32 && *c < 127) chatInput_ += *c;
+      return;
+    }
+    if (e.type == SDL_KEYDOWN) {
+      if (e.key.keysym.sym == SDLK_BACKSPACE && !chatInput_.empty()) chatInput_.pop_back();
+      if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
+        if (netSay && !chatInput_.empty()) netSay(chatInput_);
+        chatInput_.clear();
+        chatting_ = false;
+        SDL_StopTextInput();
+      }
+      if (e.key.keysym.sym == SDLK_ESCAPE) {
+        chatInput_.clear();
+        chatting_ = false;
+        SDL_StopTextInput();
+      }
+      return;
+    }
+  } else if (netSay && e.type == SDL_KEYDOWN &&
+             (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER)) {
+    chatting_ = true;
+    chatInput_.clear();
+    SDL_StartTextInput();
+    return;
+  }
   if (handleDialog(e)) return;
   if (handleGift(e)) return;
   switch (e.type) {
@@ -320,6 +349,9 @@ void WorldView::update(double dt) {
   if (sim_ && !paused && dialogs_.empty() && forcedOutcome_ == 0) {
     simAcc_ += std::min(dt, 0.25) * speed;
     if (lockstep()) speed = 1;  // everyone runs at the same pace
+    // Rejoining after a drop: race through the backlog of turns (up to 30 s of game a frame).
+    if (netBacklog && netBacklog() > 2)
+      simAcc_ = std::max(simAcc_, double(std::min<size_t>(netBacklog() * 4, 600)) * Sim::kDt);
     while (simAcc_ >= Sim::kDt) {
       if (netTick) {
         std::vector<Command> cmds;
@@ -1092,6 +1124,7 @@ void WorldView::draw() {
     drawText(r_.sdl(), box.x + 15, box.y + 10, 2, t, {255, 210, 110, 255});
   }
   drawGift();
+  drawChat();
   drawDialog();
   char t[256];
   std::snprintf(t, sizeof t,
@@ -1584,6 +1617,39 @@ void WorldView::autopilotStep() {
         if (d < bd && sim_->canDropUnit(t, x, y, player_)) bd = d, bx = x, by = y;
       }
     if (bx >= 0) issue({Command::Drop, 0, 0, bx, by});
+  }
+}
+
+void WorldView::addChat(const std::string& who, const std::string& text, bool mine) {
+  chat_.push_back({who + ": " + text, time_, mine});
+  if (chat_.size() > 40) chat_.erase(chat_.begin());
+}
+
+void WorldView::drawChat() {
+  if (!netSay && chat_.empty()) return;
+  SDL_Renderer* ren = r_.sdl();
+  int sw, sh;
+  r_.outputSize(sw, sh);
+  float y = float(sh) - 60;
+  if (chatting_) {
+    std::string line = "SAY: " + chatInput_ + "_";
+    SDL_FRect box{12, y - 6, std::max(420.0f, float(line.size()) * 12 + 24), 30};
+    SDL_SetRenderDrawColor(ren, 20, 18, 30, 230);
+    SDL_RenderFillRectF(ren, &box);
+    drawText(ren, 24, y, 2, line, {255, 220, 110, 255});
+  }
+  y -= 30;
+  int shown = 0;
+  for (size_t i = chat_.size(); i-- > 0 && shown < 6;) {
+    if (!chatting_ && time_ - chat_[i].at > 12) break;  // fade out; all recent lines while typing
+    std::string t = chat_[i].text;
+    for (auto& c : t) c = char(std::toupper(static_cast<unsigned char>(c)));
+    SDL_FRect box{12, y - 4, float(t.size()) * 12 + 20, 24};
+    SDL_SetRenderDrawColor(ren, 10, 10, 20, 170);
+    SDL_RenderFillRectF(ren, &box);
+    drawText(ren, 22, y, 2, t, chat_[i].mine ? SDL_Color{150, 210, 255, 255} : SDL_Color{235, 235, 235, 255});
+    y -= 28;
+    ++shown;
   }
 }
 

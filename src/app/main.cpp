@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
   std::string lanHostCfg, lanJoin, lanName = "Player";
   int lanPort = ns::LanSession::kPort;
   bool autopilot = false;
+  std::string sayText;
+  double dropAt = -1;
+  size_t headlessChat = 0;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -92,6 +95,8 @@ int main(int argc, char** argv) {
     else if (a == "--lan-port") lanPort = std::atoi(next().c_str());
     else if (a == "--name") lanName = next();
     else if (a == "--autopilot") autopilot = true;
+    else if (a == "--drop-at") dropAt = std::atof(next().c_str());  // test: lose the connection at this game time
+    else if (a == "--say") sayText = next();  // test hook: send one chat line once the battle runs
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
@@ -200,6 +205,8 @@ int main(int argc, char** argv) {
     world.netTick = [&](uint32_t tick, std::vector<ns::Command>& out) {
       return lan.tickCommands(tick, [&] { return world.sim()->stateHash(); }, out);
     };
+    world.netBacklog = [&]() { return lan.backlog(); };
+    world.netSay = [&](const std::string& t) { lan.say(t); };
     state = State::Game;
     currentMission.clear();
   };
@@ -260,6 +267,18 @@ int main(int argc, char** argv) {
     for (double t = 0; world.sim() ? world.sim()->time() < simulate : t < simulate; t += 1.0 / 30) {
       if (lan.role() != ns::LanSession::Role::None) {
         lan.poll();
+        if (lan.justStarted()) {  // came back after a drop: rebuild and replay
+          std::printf("LAN: rejoined, replaying the battle\n");
+          hookLan();
+        }
+        if (dropAt >= 0 && world.sim() && world.sim()->time() >= dropAt) {
+          std::printf("LAN: dropping the connection at %.0fs (test)\n", world.sim()->time());
+          lan.debugDropConnection();
+          dropAt = -1;
+        }
+        if (!sayText.empty() && world.sim() && world.sim()->time() > 5) lan.say(sayText), sayText.clear();
+        for (; headlessChat < lan.chat.size(); ++headlessChat)
+          std::printf("CHAT %s: %s\n", lan.chat[headlessChat].name.c_str(), lan.chat[headlessChat].text.c_str());
         if (lan.desync) {
           std::printf("LAN: %s\n", lan.status.c_str());
           break;
@@ -359,9 +378,12 @@ int main(int argc, char** argv) {
 
   front.setLan(&lan);
   bool skirmish = false;  // current battle is a skirmish/LAN one (not campaign)
+  size_t chatShown = 0;
   auto unhookLan = [&]() {
     world.netIssue = nullptr;
     world.netTick = nullptr;
+    world.netBacklog = nullptr;
+    world.netSay = nullptr;
     world.netStatus.clear();
   };
   bool running = true;
@@ -435,6 +457,11 @@ int main(int argc, char** argv) {
       skirmish = true;
     }
     if (world.lockstep()) world.netStatus = lan.desync ? "OUT OF SYNC: " + lan.status : lan.status;
+    for (; chatShown < lan.chat.size(); ++chatShown) {  // new chat lines into the battle view
+      auto& c = lan.chat[chatShown];
+      world.addChat(c.name, c.text, c.player == lan.localPlayer());
+    }
+    if (lan.chat.size() < chatShown) chatShown = 0;  // a new session cleared the log
     // A LAN battle keeps running behind the pause menu.
     if (state == State::Menu && world.lockstep() && front.screen() == ns::Frontend::Screen::Pause) world.update(dt);
     if (state == State::Game) {

@@ -63,6 +63,9 @@ class WorldView {
   // Command-only bot for the local player (LAN-safe "AI plays for me"; used by tests).
   bool autopilot = false;
   std::string netStatus;  // shown over the battle (waiting for players, desync, connection lost)
+  std::function<size_t()> netBacklog;               // complete turns queued (fast-forward when catching up)
+  std::function<void(const std::string&)> netSay;   // send a chat line
+  void addChat(const std::string& who, const std::string& text, bool mine);
   bool abortRequested = false, restartRequested = false;  // from script buttons
   SDL_Color colourOf(int owner) const;
   bool paused = false;
@@ -98,6 +101,15 @@ class WorldView {
   bool issue(Command c, std::string* why = nullptr);
   void autopilotStep();
   float nextAutopilot_ = 0;
+  void drawChat();
+  struct ChatShown {
+    std::string text;
+    double at;
+    bool mine;
+  };
+  std::vector<ChatShown> chat_;
+  bool chatting_ = false;
+  std::string chatInput_;
   void drawDialog();
   void drawGift();
   bool handleGift(const SDL_Event& e);

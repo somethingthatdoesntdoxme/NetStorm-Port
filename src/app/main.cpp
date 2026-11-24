@@ -141,6 +141,7 @@ int main(int argc, char** argv) {
   bool testGift = false, quickSkirmish = false;
   int skSeed = 0, skSize = -1, skOpponents = 1;
   float viewHome = 0;
+  std::string selectWhat;
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
@@ -171,6 +172,7 @@ int main(int argc, char** argv) {
     else if (a == "--skirmish") quickSkirmish = true;  // setup screen defaults: you vs one AI
     else if (a == "--seed") skSeed = std::atoi(next().c_str());
     else if (a == "--view-home") viewHome = float(std::atof(next().c_str()));
+    else if (a == "--select") selectWhat = next();
     else if (a == "--map-size") skSize = std::atoi(next().c_str());
     else if (a == "--opponents") skOpponents = std::atoi(next().c_str());
     else if (a == "--stop-at-balloon") stopAtBalloon = true;
@@ -499,6 +501,7 @@ int main(int argc, char** argv) {
   };
   if (!shot.empty()) {
     if (viewHome > 0) world.focusHome(viewHome);
+    if (!selectWhat.empty()) world.debugSelect(selectWhat);
     drawFrame();
     bool ok = r.screenshot(shot);
     std::printf("%s %s\n", ok ? "wrote" : "FAILED to write", shot.c_str());

@@ -88,6 +88,7 @@ bool WorldView::loadMission(int index) {
   startSim(3000);
   frame(float(mw.minX * kCellW), float(mw.minY * kCellH), float((mw.maxX + 1) * kCellW),
         float((mw.maxY + 1) * kCellH + 40));
+  focusHome(std::clamp(cam_.screenH / 480.0f, 1.0f, 3.0f));  // start at home, about the original scale
   return true;
 }
 
@@ -260,6 +261,11 @@ void WorldView::handle(const SDL_Event& e) {
     // Left click drops the current bridge piece (left-drag pans), right
     // click / R rotates it, middle-drag pans.
     case SDL_MOUSEBUTTONDOWN:
+      if (sim_ && e.button.x < kSidebarW) {  // sidebar: buttons act on release; the minimap drags
+        if (e.button.button == SDL_BUTTON_LEFT && minimapToCamera(e.button.x, e.button.y)) minimapDrag_ = true;
+        else if (e.button.button == SDL_BUTTON_LEFT) leftDown_ = true, moved_ = false, dragging_ = false;
+        break;
+      }
       if (e.button.button == SDL_BUTTON_RIGHT) {
         issue({Command::Rotate});
       } else {
@@ -271,6 +277,15 @@ void WorldView::handle(const SDL_Event& e) {
       }
       break;
     case SDL_MOUSEBUTTONUP:
+      if (minimapDrag_) {
+        minimapDrag_ = false;
+        break;
+      }
+      if (sim_ && e.button.x < kSidebarW) {
+        if (leftDown_) handleUiClick(e.button.x, e.button.y);
+        dragging_ = leftDown_ = false;
+        break;
+      }
       if (leftDown_ && !moved_ && !islands_.empty()) {
         int sx = e.button.x, sy = e.button.y;
         const Entity* clicked = entityAtScreen(sx, sy);
@@ -330,6 +345,15 @@ void WorldView::handle(const SDL_Event& e) {
       dragging_ = leftDown_ = false;
       break;
     case SDL_MOUSEMOTION:
+      if (minimapDrag_) {
+        minimapToCamera(std::clamp(e.motion.x, int(minimapRect_.x), int(minimapRect_.x + minimapRect_.w - 1)),
+                        std::clamp(e.motion.y, int(minimapRect_.y), int(minimapRect_.y + minimapRect_.h - 1)));
+        break;
+      }
+      if (sim_ && e.motion.x < kSidebarW && !dragging_) {
+        hoverX_ = -1;  // no bridge ghost under the sidebar
+        break;
+      }
       if (dragging_ && (std::abs(e.motion.x - pressX_) + std::abs(e.motion.y - pressY_) > 5)) moved_ = true;
       if (dragging_ && moved_) {
         cam_.x -= e.motion.xrel / cam_.zoom;
@@ -649,24 +673,6 @@ void WorldView::drawBuildUi() {
       SDL_SetTextureColorMod(st.tex, 255, 255, 255);
     }
   }
-  // Piece queue panel (top-left), drawn at a fixed screen scale.
-  const float sc = 3.0f;
-  SDL_FRect panel{12, 12, 130, 360};
-  SDL_SetRenderDrawColor(ren, 20, 20, 30, 190);
-  SDL_RenderFillRectF(ren, &panel);
-  SDL_SetRenderDrawColor(ren, 160, 140, 100, 255);
-  SDL_RenderDrawRectF(ren, &panel);
-  int line = bridgeType_->findLine("A", 1);
-  const SpriteTex& st = cache_.get(bridgeType_->set, bridgeType_->frame(line));
-  for (int i = 0; i < BridgeQueue::kVisible; ++i) {
-    const BridgeShape& s = myQueue().upcoming(i);
-    float px = 30, py = 30 + i * 112.0f;
-    float k = i == 0 ? sc : sc * 0.75f;
-    for (auto [dx, dy] : s.cells) {
-      SDL_FRect d{px + dx * 16 * k / 1.6f, py + dy * 11 * k / 1.6f, 16 * k / 1.6f, (st.h) * k / 1.6f};
-      if (st.tex) SDL_RenderCopyF(ren, st.tex, nullptr, &d);
-    }
-  }
 }
 
 std::string WorldView::demoProduction() {
@@ -721,6 +727,8 @@ bool WorldView::handleUiClick(int sx, int sy) {
         message_ = "WORKSHOP UPGRADED";
       }
       messageTime_ = time_;
+    } else if (b.action == "rotate") {
+      issue({Command::Rotate});
     } else if (b.action.rfind("drop:", 0) == 0) {
       dropIndex_ = std::atoi(b.action.c_str() + 5);
       selectedWorkshop_ = -1;
@@ -759,22 +767,7 @@ void WorldView::drawHud() {
   const SDL_Color gold{255, 220, 110, 255}, white{235, 235, 235, 255}, grey{150, 150, 150, 255},
       red{255, 90, 80, 255};
   PlayerState& me = sim_->player(player_);
-  // Storm Power (yellow under 2000, red under 1000, like the original).
-  panel({150, 12, 330, 34});
-  SDL_Color pc = me.power < 1000 ? red : me.power < 2000 ? SDL_Color{255, 230, 60, 255} : white;
-  float x = drawText(ren, 160, 21, 2, "STORM POWER ", gold);
-  drawText(ren, 160 + x, 21, 2, std::to_string(int(me.power)), pc);
-  {  // Make a golem at the temple
-    bool temple = false;
-    for (auto& e : sim_->entities()) temple |= e.alive && e.owner == player_ && e.role == Role::Temple;
-    if (temple) {
-      SDL_FRect gb{490, 12, 170, 32};
-      bool can = me.power >= Sim::kGolemCost;
-      panel(gb);
-      drawText(ren, gb.x + 10, 21, 2, "+ GOLEM " + std::to_string(Sim::kGolemCost), can ? gold : grey);
-      buttons_.push_back({gb, "golem"});
-    }
-  }
+  drawSidebar();
 
   // Mission title and the other players, in their colours (top right).
   if (!missionTitle_.empty()) {
@@ -799,102 +792,6 @@ void WorldView::drawHud() {
     }
   }
 
-  // Ready units waiting to be dropped.
-  float ry = 56;
-  for (size_t i = 0; i < me.ready.size() && i < 6; ++i) {
-    SDL_FRect r{150, ry, 330, 26};
-    panel(r);
-    std::string label = "PLACE " + me.ready[i];
-    drawText(ren, 158, ry + 6, 2, label, dropIndex_ == int(i) ? gold : white);
-    buttons_.push_back({r, "drop:" + std::to_string(i)});
-    ry += 30;
-  }
-
-  // Production menu for the selected workshop.
-  if (Entity* w = sim_->find(selectedWorkshop_)) {
-    auto list = sim_->buildable(w->id);
-    float pw = 380, px = float(cam_.screenW) - pw - 12, py = 12;
-    bool slotsOn = sim_->knowledgeGifts;
-    float ph = 60 + 30.0f * float(list.size()) + 30 + (slotsOn ? 60 : 0);
-    panel({px, py, pw, ph});
-    drawText(ren, px + 10, py + 10, 2, w->type->name + (slotsOn ? " LV " + std::to_string(w->workshopLevel) : ""), gold);
-    SDL_FRect close{px + pw - 30, py + 6, 22, 22};
-    drawText(ren, close.x + 5, close.y + 4, 2, "X", red);
-    buttons_.push_back({close, "close"});
-    if (!w->building.empty()) {
-      const TypeInfo* t = gd_.registry.byName(w->building);
-      float total = t ? std::max(4.0f, float(t->def->num("cost", 400)) / 50.0f) : 8.0f;
-      drawText(ren, px + 10, py + 34, 2, "BUILDING " + w->building, white);
-      SDL_FRect bar{px + 10, py + 52, (pw - 20) * std::min(1.0f, w->progress / total), 4};
-      SDL_SetRenderDrawColor(ren, 255, 220, 110, 255);
-      SDL_RenderFillRectF(ren, &bar);
-    } else {
-      drawText(ren, px + 10, py + 34, 2, "CHOOSE A UNIT", grey);
-    }
-    float y = py + 64;
-    for (auto* t : list) {
-      SDL_FRect r{px + 8, y, pw - 16, 26};
-      int cost = int(t->def->num("cost", 0));
-      int need = int(t->def->num("minUsage", 0));
-      int have = sim_->energyAt(player_, t->def->str("theme"), int(w->x), int(w->y));
-      bool affordable = me.power >= cost && (need <= 0 || have >= need) && w->building.empty();
-      SDL_SetRenderDrawColor(ren, 40, 40, 55, 255);
-      SDL_RenderFillRectF(ren, &r);
-      bool committed = std::find(w->slots.begin(), w->slots.end(), t->name) != w->slots.end();
-      drawText(ren, r.x + 6, y + 6, 2, (slotsOn ? (committed ? "* " : "+ ") : "") + t->name, affordable ? white : grey);
-      std::string c = std::to_string(cost);
-      drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
-      buttons_.push_back({r, "build:" + t->name});
-      y += 30;
-    }
-    if (slotsOn) {  // production slots + upgrade
-      std::string slotsTxt = "SLOTS " + std::to_string(w->slots.size()) + "/" + std::to_string(sim_->slotCapacity(*w)) +
-                             "   (* COMMITTED, + USES A SLOT)";
-      drawText(ren, px + 10, y + 4, 2, slotsTxt, grey);
-      y += 24;
-      SDL_FRect r{px + 8, y, pw - 16, 26};
-      SDL_SetRenderDrawColor(ren, 55, 45, 30, 255);
-      SDL_RenderFillRectF(ren, &r);
-      if (w->workshopLevel < 4) {
-        int cost = sim_->upgradeCost(*w);
-        drawText(ren, r.x + 6, y + 6, 2, "UPGRADE (+1 SLOT)", me.power >= cost ? gold : grey);
-        std::string c = std::to_string(cost);
-        drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
-        buttons_.push_back({r, "upgrade"});
-      } else {
-        drawText(ren, r.x + 6, y + 6, 2, "FULLY UPGRADED", grey);
-      }
-    }
-  }
-
-  // Priest panel: construction options.
-  if (Entity* pr = sim_->find(selected_); pr && pr->role == Role::Priest && selectedWorkshop_ < 0) {
-    auto list = sim_->constructable();
-    float pw = 380, px = float(cam_.screenW) - pw - 12, py = 12;
-    panel({px, py, pw, 64 + 30.0f * float(list.size())});
-    drawText(ren, px + 10, py + 10, 2, pr->immobile ? "HIGH PRIEST - IMMOBILISED" : "HIGH PRIEST - BUILD", gold);
-    SDL_FRect close{px + pw - 30, py + 6, 22, 22};
-    drawText(ren, close.x + 5, close.y + 4, 2, "X", red);
-    buttons_.push_back({close, "close"});
-    drawText(ren, px + 10, py + 34, 2, "CLICK LAND TO WALK", grey);
-    float y = py + 60;
-    for (auto* t : list) {
-      SDL_FRect r{px + 8, y, pw - 16, 26};
-      int cost = int(t->def->num("cost", 0));
-      SDL_SetRenderDrawColor(ren, constructType_ == t->name ? 70 : 40, 40, 55, 255);
-      SDL_RenderFillRectF(ren, &r);
-      drawText(ren, r.x + 6, y + 6, 2, t->name, me.power >= cost ? white : grey);
-      std::string c = std::to_string(cost);
-      drawText(ren, r.x + r.w - 6 - float(c.size()) * 12, y + 6, 2, c, me.power >= cost ? gold : red);
-      buttons_.push_back({r, "construct:" + t->name});
-      y += 30;
-    }
-  } else if (Entity* g = sim_->find(selected_); g && g->role == Role::Golem) {
-    float pw = 380, px = float(cam_.screenW) - pw - 12;
-    panel({px, 12, pw, 60});
-    drawText(ren, px + 10, 22, 2, "GOLEM", gold);
-    drawText(ren, px + 10, 44, 2, "CLICK A DOWNED ENEMY PRIEST", grey);
-  }
   // Construction ghost.
   if (!constructType_.empty()) {
     const TypeInfo* t = gd_.registry.byName(constructType_);
@@ -932,10 +829,11 @@ void WorldView::drawHud() {
   }
 
   if (!message_.empty() && time_ - messageTime_ < 3.0) {
-    float w = float(message_.size()) * 12 + 20;
-    panel({(cam_.screenW - w) / 2, float(cam_.screenH) - 50, w, 30});
-    drawText(ren, (cam_.screenW - w) / 2 + 10, float(cam_.screenH) - 42, 2, message_, red);
+    float w = float(message_.size()) * 12 + 20, cx = kSidebarW + (cam_.screenW - kSidebarW) / 2;
+    panel({cx - w / 2, float(cam_.screenH) - 50, w, 30});
+    drawText(ren, cx - w / 2 + 10, float(cam_.screenH) - 42, 2, message_, red);
   }
+  drawTooltip();
 }
 
 void WorldView::drawCombat() {
@@ -1223,12 +1121,13 @@ void WorldView::drawDialog() {
   int sw, sh;
   r_.outputSize(sw, sh);
   const ScriptSection* sec = dialogs_.front();
-  float w = std::min(900.0f, sw - 60.0f), scale = 2.5f;
+  const float left = sim_ ? kSidebarW : 0;  // centre in the area right of the sidebar
+  float w = std::min(900.0f, sw - left - 60.0f), scale = 2.5f;
   float textH = drawWrapped(ren, 0, 0, w - 60, scale, sec->text, {}, 1e9f, true);
   auto btns = noteButtons(*sec);
   size_t nb = btns.size();
   float bh = 44, h = textH + 60 + float(nb) * (bh + 8);
-  float x = (sw - w) / 2, y = std::max(20.0f, (sh - h) / 2);
+  float x = left + (sw - left - w) / 2, y = std::max(20.0f, (sh - h) / 2);
   SDL_SetRenderDrawColor(ren, 0, 0, 0, 110);
   SDL_FRect all{0, 0, float(sw), float(sh)};
   SDL_RenderFillRectF(ren, &all);
@@ -1428,7 +1327,9 @@ void WorldView::drawGift() {
   size_t fit = size_t(std::max(1.0f, (float(sh) - y - 90) / (rh + 4)));
   int cols = rows.size() > fit ? 2 : 1;
   size_t perCol = (rows.size() + cols - 1) / cols;
-  float colW = 560, w = colW * cols, x = float(sw) - w - 12;
+  // Centred in the area right of the sidebar.
+  float colW = std::min(560.0f, (float(sw) - kSidebarW - 24) / cols), w = colW * cols;
+  float x = kSidebarW + (float(sw) - kSidebarW - w) / 2;
   float h = 70 + perCol * (rh + 4);
   SDL_FRect box{x, y, w, h};
   SDL_SetRenderDrawColor(ren, 24, 22, 36, 235);
@@ -1553,6 +1454,7 @@ void WorldView::startSkirmish(const SkirmishConfig& cfg, int local) {
   missionTitle_ = "SKIRMISH";
   selectedWorkshop_ = dropIndex_ = selected_ = -1;
   frame(0, 0, float(islands_[0].width() * kCellW), float(islands_[0].height() * kCellH + 40));
+  focusHome(std::clamp(cam_.screenH / 480.0f, 1.0f, 3.0f));
 }
 
 // A simple bot that plays the local player purely through commands, so it's
@@ -1644,10 +1546,10 @@ void WorldView::drawChat() {
   float y = float(sh) - 60;
   if (chatting_) {
     std::string line = "SAY: " + chatInput_ + "_";
-    SDL_FRect box{12, y - 6, std::max(420.0f, float(line.size()) * 12 + 24), 30};
+    SDL_FRect box{kSidebarW + 12, y - 6, std::max(420.0f, float(line.size()) * 12 + 24), 30};
     SDL_SetRenderDrawColor(ren, 20, 18, 30, 230);
     SDL_RenderFillRectF(ren, &box);
-    drawText(ren, 24, y, 2, line, {255, 220, 110, 255});
+    drawText(ren, kSidebarW + 24, y, 2, line, {255, 220, 110, 255});
   }
   y -= 30;
   int shown = 0;
@@ -1655,12 +1557,21 @@ void WorldView::drawChat() {
     if (!chatting_ && time_ - chat_[i].at > 12) break;  // fade out; all recent lines while typing
     std::string t = chat_[i].text;
     for (auto& c : t) c = char(std::toupper(static_cast<unsigned char>(c)));
-    SDL_FRect box{12, y - 4, float(t.size()) * 12 + 20, 24};
+    SDL_FRect box{kSidebarW + 12, y - 4, float(t.size()) * 12 + 20, 24};
     SDL_SetRenderDrawColor(ren, 10, 10, 20, 170);
     SDL_RenderFillRectF(ren, &box);
-    drawText(ren, 22, y, 2, t, chat_[i].mine ? SDL_Color{150, 210, 255, 255} : SDL_Color{235, 235, 235, 255});
+    drawText(ren, kSidebarW + 22, y, 2, t, chat_[i].mine ? SDL_Color{150, 210, 255, 255} : SDL_Color{235, 235, 235, 255});
     y -= 28;
     ++shown;
+  }
+}
+
+void WorldView::debugSelect(const std::string& what) {
+  if (!sim_) return;
+  for (auto& e : sim_->entities()) {
+    if (!e.alive || e.owner != player_) continue;
+    if (what == "priest" && e.role == Role::Priest) selected_ = e.id, selectedWorkshop_ = -1;
+    if (what == "workshop" && e.role == Role::Workshop) selectedWorkshop_ = e.id, selected_ = -1;
   }
 }
 
@@ -1668,9 +1579,9 @@ void WorldView::focusHome(float zoom) {
   if (!sim_ || islands_.empty()) return;
   for (auto& e : sim_->entities())
     if (e.alive && e.owner == player_ && (e.role == Role::Temple || e.role == Role::Priest)) {
-      cam_.x = islands_[0].worldX + e.x * kCellW;
-      cam_.y = islands_[0].worldY + e.y * kCellH;
       cam_.zoom = zoom;
+      cam_.x = islands_[0].worldX + e.x * kCellW - kSidebarW * 0.5f / zoom;
+      cam_.y = islands_[0].worldY + e.y * kCellH;
       if (e.role == Role::Temple) return;
     }
 }

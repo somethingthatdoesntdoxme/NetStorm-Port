@@ -60,6 +60,7 @@ add_executable(netstorm
   src/render/SpriteCache.cpp
   src/app/Viewer.cpp
   src/app/WorldView.cpp
+  src/app/Sidebar.cpp
   src/app/Frontend.cpp
   src/app/FrontendSetup.cpp
   src/app/main.cpp

@@ -101,6 +101,24 @@ class WorldView {
   void anchorOf(const Entity& e, float& wx, float& wy) const;
   void startSim(float startPower);
   void drawHud();
+  // Left sidebar (Sidebar.cpp): power, bridge pieces, ready units, the
+  // selected thing's actions, minimap, tooltips.
+  static constexpr float kSidebarW = 252;
+  void drawSidebar();
+ public:
+  void debugSelect(const std::string& what);  // tests: "priest" or "workshop"
+ private:
+  void drawMinimap(SDL_FRect area);
+  void drawTooltip();
+  bool minimapToCamera(int sx, int sy);  // true if (sx,sy) is on the minimap
+  void thumb(const TypeInfo* t, SDL_FRect box);
+  SDL_FRect minimapRect_{0, 0, 0, 0};
+  SDL_Texture* minimapTex_ = nullptr;
+  int minimapX0_ = 0, minimapY0_ = 0, minimapW_ = 0, minimapH_ = 0;
+  double minimapAt_ = -1;
+  bool minimapDrag_ = false;
+  std::vector<std::pair<double, float>> powerHist_;  // (time, power) samples for the income rate
+  SDL_Texture* stoneTex_ = nullptr;
   // Every order goes through here: applied now in local play, or handed to the
   // network (netIssue) to be applied on every peer at the same tick.
   bool issue(Command c, std::string* why = nullptr);
@@ -154,6 +172,7 @@ class WorldView {
   struct Button {
     SDL_FRect r;
     std::string action;
+    std::string tip;  // hover tooltip
   };
   std::vector<Button> buttons_;
   const TypeInfo* isle_ = nullptr;

@@ -44,6 +44,12 @@ World controls: click your priest to walk/build (temples, workshops, altars), cl
 downed enemy priest to capture him, click a workshop to produce units, left click drop bridge piece, right click / R rotate, B let the AI
 place one, drag or WASD pan, wheel zoom, M / [ ] cycle missions, N test layout, G grid.
 
+The left sidebar holds Storm Power (with income per minute), the golem button, the next bridge
+pieces (click the big one to rotate), units ready to drop, the build grid for whatever priest or
+workshop is selected, and a minimap (click or drag to move the view). Hover anything for a
+tooltip. Games open on your temple at roughly the original's scale. The sidebar art is drawn in
+code; unit pictures come from your install.
+
 Sprite viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,
 drag to pan, F sharp/smooth filtering, T cycle team colours, Space animate,
 F11 fullscreen.

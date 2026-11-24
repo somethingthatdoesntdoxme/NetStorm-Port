@@ -437,7 +437,7 @@ void WorldView::drawSky() {
       const SpriteTex& st = cache_.get(cloud_->set, f);
       if (!st.tex) continue;
       SDL_FRect d{(tx * tile - left) * z, (ty * tile - top) * z, tile * z + 1, tile * z + 1};
-      SDL_SetTextureColorMod(st.tex, 112, 104, 128);  // dusky purple-grey, as in the original
+      SDL_SetTextureColorMod(st.tex, 96, 102, 118);  // blue-grey, measured off original footage
       SDL_RenderCopyF(ren, st.tex, nullptr, &d);
       SDL_SetTextureColorMod(st.tex, 255, 255, 255);
     }
@@ -557,8 +557,13 @@ void WorldView::drawIsland(const Island& isl) {
       if (line < 0) continue;
       float ax = ox + (x + 1) * kCellW - 1, ay = oy + (y + 1) * kCellH - 1;
       int own = isl.ownerAt(x, y) ? isl.ownerAt(x, y) : isl.owner;
-      if (own > 0 && tc.cluster != "AA")
-        blit(cache_.tinted(isle_->set, isle_->frame(line), colourOf(own), rimMask_), ax, ay);
+      if (own > 0 && own != player_ && tc.cluster != "AA") {
+        // As in the original: your land keeps the plain rim, everyone else's
+        // gets a dark shade of their colour.
+        SDL_Color c = colourOf(own);
+        c = {Uint8(c.r * 0.6f), Uint8(c.g * 0.6f), Uint8(c.b * 0.6f), 255};
+        blit(cache_.tinted(isle_->set, isle_->frame(line), c, rimMask_), ax, ay);
+      }
       else
         blit(cache_.get(isle_->set, isle_->frame(line)), ax, ay);
       if (showGrid_) {
@@ -746,7 +751,7 @@ void WorldView::drawHud() {
   SDL_Renderer* ren = r_.sdl();
   buttons_.clear();
   auto panel = [&](SDL_FRect r) {
-    SDL_SetRenderDrawColor(ren, 18, 18, 28, 210);
+    SDL_SetRenderDrawColor(ren, 18, 18, 28, 255);
     SDL_RenderFillRectF(ren, &r);
     SDL_SetRenderDrawColor(ren, 160, 140, 100, 255);
     SDL_RenderDrawRectF(ren, &r);
@@ -1657,6 +1662,17 @@ void WorldView::drawChat() {
     y -= 28;
     ++shown;
   }
+}
+
+void WorldView::focusHome(float zoom) {
+  if (!sim_ || islands_.empty()) return;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.owner == player_ && (e.role == Role::Temple || e.role == Role::Priest)) {
+      cam_.x = islands_[0].worldX + e.x * kCellW;
+      cam_.y = islands_[0].worldY + e.y * kCellH;
+      cam_.zoom = zoom;
+      if (e.role == Role::Temple) return;
+    }
 }
 
 }  // namespace ns

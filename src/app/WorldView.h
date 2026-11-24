@@ -84,6 +84,7 @@ class WorldView {
   int balloonsAirborne() const;
   void focusOnBalloon();
   void focusOnAir();
+  void focusHome(float zoom);  // test hook: centre on our temple at this zoom
   void debugGrantGift();  // test hook: give player 1 a finished sacrifice to choose a gift for  // test hook: centre the camera on the air fight  // per-player state dump for headless runs
   void setAiForMe(bool b) { aiForMe_ = b; }
   int player() const { return player_; }  // let the bridge AI play `pieces` pieces for the player

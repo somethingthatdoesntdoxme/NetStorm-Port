@@ -328,19 +328,21 @@ void Sim::kill(Entity& e) {
   }
   // Losing your temple loses you control of its island: it reverts to neutral,
   // so anyone can bridge onto it and claim it.
-  if (e.role == Role::Temple && e.owner > 0) {
+  if (e.role == Role::Temple && e.owner >= 0) {
+    // ...and its land goes over to the Sun (green), as in the original.
     std::vector<std::pair<int, int>> stack{{int(e.x), int(e.y)}}, freedCells;
     int freed = 0;
     while (!stack.empty()) {
       auto [x, y] = stack.back();
       stack.pop_back();
-      if (!world_.filled(x, y) || world_.ownerAt(x, y) != e.owner) continue;
+      if (!world_.filled(x, y) || world_.ownerAt(x, y) != e.owner || world_.at(x, y) == Element::Sun) continue;
       world_.setOwner(x, y, 0);
+      world_.set(x, y, Element::Sun);
       freedCells.push_back({x, y});
       ++freed;
       stack.push_back({x + 1, y}), stack.push_back({x - 1, y}), stack.push_back({x, y + 1}), stack.push_back({x, y - 1});
     }
-    if (freed) log("P" + std::to_string(e.owner) + " lost its temple - its island is neutral again");
+    if (freed && e.owner > 0) log("P" + std::to_string(e.owner) + " lost its temple - its island is neutral again");
     // Bridges already touching it claim it straight away (the side touching it most).
     std::array<int, 9> contact{};
     for (auto [x, y] : freedCells)

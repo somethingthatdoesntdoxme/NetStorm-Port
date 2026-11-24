@@ -146,9 +146,40 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     const FortSection& terr = fort.territories[ti];
     if (terr.objects.empty()) continue;
     int nChunks = std::max(1, terr.chunkCount);
-    int cols = nChunks > 6 ? 3 : 2;
-    int rows = (nChunks + cols - 1) / cols;
-    int w = cols * 16, h = rows * 16;
+    // Chunk layout: a random connected polyomino (the original builds the
+    // chunk-to-world map at runtime; a polyomino gives its T/L-shaped arms).
+    std::vector<std::pair<int, int>> cpos{{0, 0}};
+    auto taken = [&](int x, int y) {
+      for (auto& p : cpos) if (p.first == x && p.second == y) return true;
+      return false;
+    };
+    // Never grow towards the middle of the map: arms poking into the
+    // neutral area put home buildings in enemy range.
+    const int side = placed % 6;  // 0 N, 1 S, 2 W, 3 E, 4 NW, 5 SE (see placement below)
+    auto inward = [&](int d) {
+      return ((side == 0 || side == 4) && d == 2) || (side == 1 && d == 3) || ((side == 2 || side == 4) && d == 0) ||
+             ((side == 3 || side == 5) && d == 1) || (side == 5 && d == 3);
+    };
+    for (int c = 1; c < nChunks; ++c) {
+      for (int tries = 0; tries < 64; ++tries) {
+        uint32_t h = hash2(c, tries, seed + uint32_t(ti) * 31);
+        // Mostly grow from the newest chunk, so arms form.
+        const auto& from = (h & 3) ? cpos.back() : cpos[(h >> 2) % cpos.size()];
+        static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        int d = int((h >> 8) & 3);
+        if (inward(d) && tries < 48) continue;
+        int nx = from.first + dx[d], ny = from.second + dy[d];
+        if (!taken(nx, ny)) { cpos.push_back({nx, ny}); break; }
+      }
+      if (int(cpos.size()) <= c) cpos.push_back({c, 99});  // shouldn't happen
+    }
+    int minX = 0, minY = 0, maxX = 0, maxY = 0;
+    for (auto& p : cpos) {
+      minX = std::min(minX, p.first), maxX = std::max(maxX, p.first);
+      minY = std::min(minY, p.second), maxY = std::max(maxY, p.second);
+    }
+    for (auto& p : cpos) p.first -= minX, p.second -= minY;
+    int w = (maxX - minX + 1) * 16, h = (maxY - minY + 1) * 16;
     int cxm = (bx0 + bx1) / 2, cym = (by0 + by1) / 2;
     int ox, oy;
     switch (placed % 6) {
@@ -178,16 +209,23 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     // Wind/rain/thunder forts in the original mostly sit on their own grass;
     // keep that, but sun stays green.
 
-    // Home island: the territory's chunks, with organic edges.
+    // Home island: each chunk's land inset from the sides that have no
+    // neighbouring chunk, with ragged edges.
     for (int c = 0; c < nChunks; ++c) {
-      int gx = ox + (c % cols) * 16, gy = oy + (c / cols) * 16;
+      int px = cpos[size_t(c)].first, py = cpos[size_t(c)].second;
+      bool L = taken(px - 1, py), R = taken(px + 1, py), U = taken(px, py - 1), D = taken(px, py + 1);
+      int gx = ox + px * 16, gy = oy + py * 16;
       for (int y = 0; y < 16; ++y)
         for (int x = 0; x < 16; ++x) {
           int wx = gx + x, wy = gy + y;
-          float u = float(wx - ox) / w, v = float(wy - oy) / h;  // 0..1 across the fort
-          float edge = std::min({u, v, 1 - u, 1 - v}) * std::min(w, h);  // distance to fort edge, cells
-          float n = noise(wx * 0.18f, wy * 0.18f, seed + uint32_t(ti) * 7) * 5.0f;
-          if (edge + 0.5f > n) {
+          float edge = 99;
+          if (!L) edge = std::min(edge, float(x));
+          if (!R) edge = std::min(edge, float(15 - x));
+          if (!U) edge = std::min(edge, float(y));
+          if (!D) edge = std::min(edge, float(15 - y));
+          float n = 0.8f + noise(wx * 0.16f, wy * 0.16f, seed + uint32_t(ti) * 7) * 3.5f +
+                    noise(wx * 0.5f, wy * 0.5f, seed + uint32_t(ti) * 13) * 1.6f;
+          if (edge > n) {
             land.set(wx, wy, el);
             land.setOwner(wx, wy, owner);
           }
@@ -195,13 +233,14 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
     }
     for (auto& o : terr.objects) {
       int c = o.chunk;
-      int ax = ox + (c % cols) * 16 + o.x, ay = oy + (c / cols) * 16 + o.y;
+      if (c < 0 || c >= nChunks) c = 0;
+      int ax = ox + cpos[size_t(c)].first * 16 + o.x, ay = oy + cpos[size_t(c)].second * 16 + o.y;
       addObject(o, ax, ay, o.owner > 0 ? o.owner : (o.type == "geyser" ? 0 : owner));
       // Make sure every building of the fort stands on land.
       const TypeInfo* t = gd.registry.byName(o.type);
       int fx, fy;
       footprint(t, fx, fy);
-      fillRect(ax - fx, ay - fy, ax + 1, ay + 1, el, owner);
+      if (o.type != "bridge") fillRect(ax - fx, ay - fy, ax + 1, ay + 1, el, owner);
     }
   }
   land.tidy();

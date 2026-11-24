@@ -134,6 +134,9 @@ class Sim {
   // sacrifice leaves a gift to choose: new Knowledge (consumes the altar) or an
   // altar upgrade. Starting Knowledge = every buildable unit with no techBit.
   bool knowledgeGifts = false;
+  // Skirmish safety net (not in the original): a player with no golems and less
+  // than a golem's price gets one free from their temple after a minute.
+  bool safetyGolem = false;
   std::vector<std::string> starterKnowledge() const;
   std::vector<const TypeInfo*> giftOptions(int player) const;  // Knowledge on offer
   bool canUpgradeAltar(int player) const;

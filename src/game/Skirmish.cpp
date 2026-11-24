@@ -96,7 +96,7 @@ void generateSkirmish(const GameData& gd, const SkirmishConfig& cfg, Island& wor
   std::vector<int> players;
   for (int i = 0; i < 8; ++i)
     if (cfg.slots[size_t(i)].kind != SkirmishSlot::Closed) players.push_back(i + 1);
-  const int hw = 30, hh = 24;
+  const int hw = 36, hh = 28;  // room for a temple, workshops, an altar and three geysers
   float cx = W / 2.0f, cy = H / 2.0f, rx = W / 2.0f - hw / 2.0f - 4, ry = H / 2.0f - hh / 2.0f - 4;
   float start = float(rng.range(0, 359)) * det::kPi / 180;
   for (size_t k = 0; k < players.size(); ++k) {
@@ -110,7 +110,10 @@ void generateSkirmish(const GameData& gd, const SkirmishConfig& cfg, Island& wor
     // Base: temple in the middle, priest beside it, a geyser on the home island.
     place(templeFor(s.fury), p, x0 + hw / 2 - 4, y0 + hh / 2 - 3);
     place("priest", p, x0 + hw / 2 + 6, y0 + hh / 2 + 4);
+    // Three geysers at home (one runs dry after 2000 Storm Power).
     place("geyser", 0, x0 + 5, y0 + hh / 2 - 1);
+    place("geyser", 0, x0 + hw / 2 - 1, y0 + 3);
+    place("geyser", 0, x0 + hw - 8, y0 + hh - 7);
   }
   // Neutral islands with geysers between the homes.
   int made = 0;

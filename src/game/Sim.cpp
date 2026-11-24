@@ -107,6 +107,25 @@ void Sim::step() {
     else if (e.role == Role::Flyer) stepFlyer(ents_[i]);
   }
   stepProjectiles();
+  if (safetyGolem && tick_ % 20 == 0) {  // once a second
+    std::array<int, 9> golems{}, temple{};
+    temple.fill(-1);
+    for (auto& e : ents_)
+      if (e.alive && e.owner > 0 && e.owner <= 8) {
+        golems[size_t(e.owner)] += e.role == Role::Golem;
+        if (e.role == Role::Temple && e.built >= 1) temple[size_t(e.owner)] = e.id;
+      }
+    for (int p = 1; p <= 8; ++p) {
+      PlayerState& ps = players_[size_t(p)];
+      bool broke = temple[size_t(p)] >= 0 && !out_[size_t(p)] && golems[size_t(p)] == 0 && ps.power < kGolemCost;
+      ps.golemTimer = broke ? ps.golemTimer + 1 : 0;
+      if (broke && ps.golemTimer >= 60) {
+        ps.golemTimer = 0;
+        if (const TypeInfo* g = gd_.registry.byName("sunWalker"); g && spawnWalkerNear(g, p, temple[size_t(p)]) >= 0)
+          log("P" + std::to_string(p) + "'s temple raised a golem (safety net)");
+      }
+    }
+  }
   for (auto& fx : effects_) fx.t += kDt;
   effects_.erase(std::remove_if(effects_.begin(), effects_.end(), [](const Effect& f) { return f.t >= f.life; }),
                  effects_.end());

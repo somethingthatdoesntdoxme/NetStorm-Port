@@ -46,7 +46,9 @@ int placeBridge(Island& world, const BridgeShape& shape, int x, int y, int playe
 // of any goal point -- e.g. enemy buildings, so our shooters can reach them.
 bool bestBridgeMove(const Island& world, BridgeQueue& queue, int player, int& outX, int& outY,
                     uint16_t enemyMask = 0, const std::vector<std::pair<int, int>>* goals = nullptr,
-                    int goalRadius = 0, const std::vector<uint8_t>* connected = nullptr);
+                    int goalRadius = 0, const std::vector<uint8_t>* connected = nullptr, int slack = 0);
+// slack > 0 also accepts moves that don't get closer (up to `slack` cells worse than
+// our best point) -- used to work around a front that's boxed in by enemy bridges.
 // Cells (land + bridges, any owner) joined on foot to `fromX,fromY` -- an AI only
 // extends from territory its golems can actually reach (cut-off bridge ends don't count).
 std::vector<uint8_t> walkableFrom(const Island& world, int fromX, int fromY);

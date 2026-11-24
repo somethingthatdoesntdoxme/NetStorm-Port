@@ -1,4 +1,7 @@
 #include "game/BridgePieces.h"
+#include <string>
+#include <cstdlib>
+#include <cstdio>
 
 #include <algorithm>
 #include <deque>
@@ -106,7 +109,7 @@ int placeBridge(Island& w, const BridgeShape& shape, int x, int y, int player) {
 
 bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, int& outY, uint16_t enemyMask,
                     const std::vector<std::pair<int, int>>* goals, int goalRadius,
-                    const std::vector<uint8_t>* connected) {
+                    const std::vector<uint8_t>* connected, int slack) {
   auto mine = [&](int mx, int my) {
     if (!((w.filled(mx, my) && w.ownerAt(mx, my) == player) || w.bridgeAt(mx, my) == player)) return false;
     return !connected || (mx >= 0 && my >= 0 && mx < w.width() && my < w.height() &&
@@ -130,7 +133,9 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
       } else
       target = enemyMask ? ((w.filled(x, y) && ((enemyMask >> w.ownerAt(x, y)) & 1)) ||
                                  (w.bridgeAt(x, y) && ((enemyMask >> w.bridgeAt(x, y)) & 1)))
-                              : (w.filled(x, y) && w.ownerAt(x, y) != player);  // unowned or enemy land
+                              : (w.filled(x, y) && w.ownerAt(x, y) == 0);  // unclaimed land only:
+      // counting enemy land here made expansion stop for good once our territory
+      // touched theirs, leaving free geyser islands unclaimed (attack mode handles enemies)
       if (target) {
         dist[size_t(y) * W + x] = 0;
         q.push_back(y * W + x);
@@ -166,25 +171,38 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
         if (mine(x + n[0], y + n[1])) current = std::min(current, dist[size_t(y) * W + x]);
     }
   if (current == 0) return false;  // already touching the target: nothing to bridge
+  if (current == std::numeric_limits<int>::max() && slack == 0) return false;
   int best = std::numeric_limits<int>::max(), bx = 0, by = 0, brot = 0;
+  int dbgPlace = 0, dbgJoined = 0, dbgFinite = 0, dbgBestScore = std::numeric_limits<int>::max();
   BridgeShape s = queue.current();
   for (int rot = 0; rot < 4; ++rot, s = s.rotated()) {
     for (int y = std::max(1, minY - 5); y <= std::min(H - 2, maxY + 5); ++y)
       for (int x = std::max(1, minX - 5); x <= std::min(W - 2, maxX + 5); ++x) {
         if (!canPlaceBridge(w, s, x, y, player)) continue;
+        ++dbgPlace;
         if (connected) {  // must grow from the part of our territory we can walk to
           bool joined = false;
           for (auto [dx, dy] : s.cells)
             for (auto [nx, ny] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) joined |= mine(x + dx + nx, y + dy + ny);
           if (!joined) continue;
         }
+        ++dbgJoined;
         int score = std::numeric_limits<int>::max();
         for (auto [dx, dy] : s.cells) score = std::min(score, dist[size_t(y + dy) * W + x + dx]);
-        if (score == std::numeric_limits<int>::max() || score >= current) continue;  // must make progress
+        // Must make progress (or, with slack, at least not lose much). No int overflow
+        // when our whole front is cut off from the goal (current == max).
+        if (score == std::numeric_limits<int>::max()) continue;
+        ++dbgFinite;
+        dbgBestScore = std::min(dbgBestScore, score);
+        if (current != std::numeric_limits<int>::max() && score >= current + slack) continue;
         score = score * 10 - int(s.cells.size());  // prefer progress, then bigger pieces
         if (score < best) best = score, bx = x, by = y, brot = rot;
       }
   }
+  if (goals && slack > 0 && std::getenv("NS_DEBUG_BRIDGE") && std::string(std::getenv("NS_DEBUG_BRIDGE")) == "2")
+    std::fprintf(stderr, "bridge P%d: current %d slack %d | placeable %d joined %d finite %d best %d\n", player,
+                 current == std::numeric_limits<int>::max() ? -1 : current, slack, dbgPlace, dbgJoined, dbgFinite,
+                 dbgBestScore == std::numeric_limits<int>::max() ? -1 : dbgBestScore);
   if (best == std::numeric_limits<int>::max()) return false;
   for (int i = 0; i < brot; ++i) queue.rotate();
   outX = bx;

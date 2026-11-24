@@ -26,7 +26,16 @@ def peer(args, tag, port, seconds):
 
 def parse(out):
     res = next((json.loads(l[7:]) for l in out.splitlines() if l.startswith("RESULT ")), None)
-    hashes = [l for l in out.splitlines() if l.startswith("HASH ")]
+    # tick -> hash. A rejoining peer replays from tick 0 and prints some ticks twice;
+    # every printing of a tick must agree, so keep them all and check consistency.
+    hashes = {}
+    for l in out.splitlines():
+        if l.startswith("HASH "):
+            _, tick, h = l.split()
+            if hashes.get(tick, h) != h:
+                hashes[tick] = "INCONSISTENT"
+            else:
+                hashes[tick] = h
     lan = [l for l in out.splitlines() if l.startswith("LAN:")]
     return res, hashes, lan
 

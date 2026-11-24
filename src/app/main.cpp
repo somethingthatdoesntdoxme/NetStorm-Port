@@ -8,6 +8,7 @@
 #include <SDL.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -24,15 +25,7 @@ namespace {
 void printStats(ns::WorldView& world, float before, double simulate, const ns::GameData& gd) {
   auto* sim = world.sim();
   if (!sim) return;
-  auto& p = sim->player(world.player());
-  if (!p.ready.empty()) {
-    bool dropped = false;
-    for (int y = 2; y < 200 && !dropped; ++y)
-      for (int x = 2; x < 200 && !dropped; ++x)
-        if (sim->canDropUnit(gd.registry.byName(p.ready[0]), x, y, world.player()))
-          dropped = sim->dropUnit(world.player(), 0, x, y);
-    std::printf("dropped ready unit: %s\n", dropped ? "yes" : "no");
-  }
+  auto& p = sim->player(world.player());  // (stats only: never changes the game)
   int counts[9] = {0};
   for (auto& e : sim->entities())
     if (e.alive && e.owner > 0 && e.owner <= 8) counts[e.owner]++;
@@ -58,6 +51,7 @@ int main(int argc, char** argv) {
   bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
   int stopAtAir = 0;
   bool testGift = false, quickSkirmish = false;
+  int skSeed = 0, skSize = -1, skOpponents = 1;
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
@@ -86,6 +80,9 @@ int main(int argc, char** argv) {
     else if (a == "--stop-at-note") stopAtNote = true;
     else if (a == "--test-gift") testGift = true;
     else if (a == "--skirmish") quickSkirmish = true;  // setup screen defaults: you vs one AI
+    else if (a == "--seed") skSeed = std::atoi(next().c_str());
+    else if (a == "--map-size") skSize = std::atoi(next().c_str());
+    else if (a == "--opponents") skOpponents = std::atoi(next().c_str());
     else if (a == "--stop-at-balloon") stopAtBalloon = true;
     else if (a == "--validate") validate = true;
     else if (a == "--list-missions") listMissions = true;
@@ -262,7 +259,12 @@ int main(int argc, char** argv) {
   world.autopilot = autopilot;
   if (quickSkirmish) {
     front.open("skirmish");
-    world.startSkirmish(front.setupConfig(), 1);
+    ns::SkirmishConfig cfg = front.setupConfig();
+    if (skSeed) cfg.seed = uint32_t(skSeed);
+    if (skSize >= 0) cfg.mapSize = std::min(2, skSize);
+    const char* furies[3] = {"thunder", "wind", "rain"};
+    for (int i = 1; i <= std::min(7, skOpponents); ++i) cfg.slots[size_t(i)] = {ns::SkirmishSlot::AI, furies[i % 3], 0, ""};
+    world.startSkirmish(cfg, 1);
     state = State::Game;
     front.showTitle();
   }
@@ -277,12 +279,22 @@ int main(int argc, char** argv) {
     float before = world.sim() ? world.sim()->player(world.player()).power : 0;
     double nextCheck = 1, nextHash = hashEvery;
     Uint64 wall0 = SDL_GetTicks64();
-    for (double t = 0; world.sim() ? world.sim()->time() < simulate : t < simulate; t += 1.0 / 30) {
+    // Stop at an exact tick and print hashes at exact ticks, so peers compare like with like.
+    const uint32_t stopTick = uint32_t(simulate / ns::Sim::kDt + 0.5);
+    world.stopAtTick = stopTick;
+    if (hashEvery > 0)
+      world.afterTick = [&](uint32_t tick) {
+        uint32_t every = std::max<uint32_t>(1, uint32_t(hashEvery / ns::Sim::kDt + 0.5));
+        if (tick % every == 0)
+          std::printf("HASH %u %016llx\n", tick, (unsigned long long)world.sim()->stateHash());
+      };
+    for (double t = 0; world.sim() ? world.sim()->tick() < stopTick : t < simulate; t += 1.0 / 30) {
       if (lan.role() != ns::LanSession::Role::None) {
         lan.poll();
         if (lan.justStarted()) {  // came back after a drop: rebuild and replay
           std::printf("LAN: rejoined, replaying the battle\n");
           hookLan();
+          world.stopAtTick = stopTick;
         }
         if (dropAt >= 0 && world.sim() && world.sim()->time() >= dropAt) {
           std::printf("LAN: dropping the connection at %.0fs (test)\n", world.sim()->time());
@@ -305,6 +317,16 @@ int main(int argc, char** argv) {
           break;
         }
       }
+      if (std::getenv("NS_DEBUG_ECON") && world.sim() && world.sim()->tick() % (20 * 120) == 0) {
+        for (int p = 1; p <= 2; ++p) {
+          int sh = 0, gol = 0;
+          for (auto& e : world.sim()->entities())
+            if (e.alive && e.owner == p) sh += e.role == ns::Role::Shooter, gol += e.role == ns::Role::Golem;
+          auto& ps = world.sim()->player(p);
+          std::printf("ECON t=%4.0f P%d power=%5.0f delivered=%3d shooters=%2d golems=%d ready=%zu\n",
+                      world.sim()->time(), p, ps.power, ps.delivered, sh, gol, ps.ready.size());
+        }
+      }
       uint32_t before = world.sim() ? world.sim()->tick() : 0;
       world.update(1.0 / 30);
       if (lan.role() != ns::LanSession::Role::None && world.sim() && world.sim()->tick() == before) SDL_Delay(1);
@@ -317,10 +339,7 @@ int main(int argc, char** argv) {
           if (firstViolations.size() < 10) firstViolations.push_back("[" + std::to_string(int(t)) + "s] " + v);
         }
       }
-      if (hashEvery > 0 && world.sim() && t >= nextHash) {
-        nextHash += hashEvery;
-        std::printf("HASH %.0f %016llx\n", world.sim()->time(), (unsigned long long)world.sim()->stateHash());
-      }
+      (void)nextHash;
       if (world.outcome() != 0) {
         std::printf("game over after %.0fs: %s\n", t, world.outcome() > 0 ? "WON" : "LOST");
         break;

@@ -353,6 +353,10 @@ void WorldView::update(double dt) {
     if (netBacklog && netBacklog() > 2)
       simAcc_ = std::max(simAcc_, double(std::min<size_t>(netBacklog() * 4, 600)) * Sim::kDt);
     while (simAcc_ >= Sim::kDt) {
+      if (stopAtTick && sim_->tick() >= stopAtTick) {
+        simAcc_ = 0;
+        break;
+      }
       if (netTick) {
         std::vector<Command> cmds;
         if (!netTick(sim_->tick(), cmds)) {  // waiting for other players' orders
@@ -370,6 +374,7 @@ void WorldView::update(double dt) {
         // The local "AI plays for me" acts directly on the sim, so it's off in
         // lockstep games (it would desync); the autopilot issues commands instead.
         if (ai.player() != player_ || (aiForMe_ && !lockstep())) ai.step(*sim_, islands_[0]);
+      if (afterTick) afterTick(sim_->tick());
       simAcc_ -= Sim::kDt;
       if (hasMission_) {
         for (auto& ev : script_.step(*sim_)) {
@@ -1513,6 +1518,7 @@ void WorldView::startSkirmish(const SkirmishConfig& cfg, int local) {
   for (auto& pl : spawns) sim_->spawn(gd_.registry.byName(pl.type), pl.owner, pl.x, pl.y);
   // Rules, Knowledge, Storm Power, golems.
   sim_->knowledgeGifts = true;
+  sim_->safetyGolem = true;
   for (int p = 1; p <= 8; ++p) {
     auto& ps = sim_->player(p);
     ps.power = float(cfg.startPower);

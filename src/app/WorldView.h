@@ -62,6 +62,10 @@ class WorldView {
   bool lockstep() const { return bool(netTick); }
   // Command-only bot for the local player (LAN-safe "AI plays for me"; used by tests).
   bool autopilot = false;
+  // Tests: never simulate past this tick (0 = no limit), and a hook after every tick,
+  // so every peer reports/stops at exactly the same tick.
+  uint32_t stopAtTick = 0;
+  std::function<void(uint32_t tick)> afterTick;
   std::string netStatus;  // shown over the battle (waiting for players, desync, connection lost)
   std::function<size_t()> netBacklog;               // complete turns queued (fast-forward when catching up)
   std::function<void(const std::string&)> netSay;   // send a chat line

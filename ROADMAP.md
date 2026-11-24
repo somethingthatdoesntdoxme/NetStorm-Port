@@ -189,3 +189,16 @@ the engine's island placement (an approximation) puts the player's start inside 
 - Tests (tools/test/lan.py): 2 humans + AI, 3 humans, client killed, connection lost + rejoin + replay, chat, relay
   with a mid-battle drop and rejoin through the relay.
 - Next: AI tuning for generated maps (homes have one geyser: economies are tight).
+
+## Skirmish pacing pass
+- Generated maps: bigger home islands (36x28) with three geysers; skirmish-only safety net (not in the original): a
+  player with no golems and less than a golem's price gets one from their temple after a minute.
+- AI: keeps a golem's price in reserve while short of golems; builds an altar as soon as an enemy priest is down;
+  ignores stranded half-built altars; full-resolution site search (7x7 altar fits on crowded islands), rate-limited;
+  bridges sideways round enemy bridges when boxed in (slack, overflow-safe).
+- Bridging bug: expansion counted enemy land as a target, so it stopped for good once territories touched and free
+  geyser islands were never claimed -> both economies dried up after ~17 minutes. Now expansion = unclaimed land only.
+- Results: 1v1 generated skirmishes finish on small/medium/large maps (7-13 min); campaign scoreboard 6/8 decisive.
+  3-4 player free-for-alls still run long.
+- Test harness: runs stop and hash at exact ticks; stats printing no longer mutates the game (it was dropping a unit
+  for the local player after the battle, which made peers' final hashes differ).

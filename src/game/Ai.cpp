@@ -1,5 +1,7 @@
 #include "game/Ai.h"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -50,7 +52,11 @@ void SkirmishAi::step(Sim& sim, Island& world) {
     } else {
       reachFor_ = -1;
     }
-    if (!moved) moved = bestBridgeMove(world, queue_, player_, x, y, 0, nullptr, 0, conn);
+    if (!moved) {
+      moved = bestBridgeMove(world, queue_, player_, x, y, 0, nullptr, 0, conn);
+      if (moved && std::getenv("NS_DEBUG_BRIDGE") && tick_ % 1200 < unsigned(bridgeEvery_))
+        sim.log("P" + std::to_string(player_) + " expansion bridging placed");
+    }
     if (!moved) {  // nothing left to claim: get within shooting range of enemy buildings
       std::vector<std::pair<int, int>> goals;
       for (auto& e : sim.entities())
@@ -70,6 +76,15 @@ void SkirmishAi::step(Sim& sim, Island& world) {
       // tighter goals so the foothold gets wide enough for real units.
       for (int r = std::clamp(reach - 2, 5, 30); !goals.empty() && !moved && r >= 4; r -= 5)
         moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, r, conn);
+      // Boxed in (enemy bridges in the way)? After a few failures, accept sideways
+      // moves to work round the obstacle.
+      if (!moved && !goals.empty() && ++stuck_ > 4)
+        moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, std::clamp(reach - 2, 5, 30), conn,
+                               std::min(12, stuck_ / 2));
+      if (moved) stuck_ = 0;
+      if (std::getenv("NS_DEBUG_BRIDGE") && tick_ % 1200 < unsigned(bridgeEvery_))
+        sim.log("P" + std::to_string(player_) + " attack-bridging: goals " + std::to_string(goals.size()) + " reach " +
+                std::to_string(reach) + " stuck " + std::to_string(stuck_) + (moved ? " placed" : " no move"));
     }
     if (moved) placeBridge(world, queue_.current(), x, y, player_);
     queue_.next();
@@ -84,8 +99,10 @@ bool SkirmishAi::findSite(Sim& sim, Island& world, int priestId, const TypeInfo*
   if (!pr) return false;
   float best = 1e18f;
   bool found = false;
-  for (int y = 1; y < world.height() - 1; y += 2)
-    for (int x = 1; x < world.width() - 1; x += 2) {
+  // Every cell: big buildings (a 7x7 altar) may only fit at odd/even anchors on a
+  // crowded island. Callers rate-limit this.
+  for (int y = 1; y < world.height() - 1; ++y)
+    for (int x = 1; x < world.width() - 1; ++x) {
       if (!world.filled(x, y) || world.ownerAt(x, y) != player_) continue;
       float d = (x - pr->x) * (x - pr->x) + (y - pr->y) * (y - pr->y);
       if (d >= best) continue;
@@ -204,10 +221,17 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
     }
     if (!sent && tick_ % 1200 == 11) sim.log("P" + std::to_string(player_) + " AI capture failed: " + why);
   }
+  if (std::getenv("NS_DEBUG_PRIEST") && tick_ % 600 == 3 && priest)
+    sim.log("P" + std::to_string(player_) + " AI priest state: job " + std::to_string(int(priest->job)) +
+            (priest->immobile ? " (immobile)" : "") + " power " + std::to_string(int(sim.player(player_).power)));
   if (!priest || priest->immobile || priest->job != Entity::Job::Idle) return;
   // Finish anything we left half-built (e.g. after being knocked down) before starting more.
   for (auto& b : sim.entities())
     if (b.alive && b.owner == player_ && b.built < 1 && sim.orderResume(priest->id, b.id)) return;
+  // Anything still half-built here is stranded (the priest can't get back to it), so
+  // a stranded altar doesn't count: build a usable one.
+  for (auto& b : sim.entities())
+    if (b.alive && b.owner == player_ && b.role == Role::Altar && b.built < 1) --altars;
   // 3. Construction: the workshops our Knowledge needs, then an altar once we're fighting.
   const TypeInfo* want = nullptr;
   for (auto& th : neededWorkshops(sim, fury)) {
@@ -220,10 +244,20 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
       break;
     }
   }
-  if (!want && altars == 0 && shooters >= 3) want = sim.registryType("altar");
+  // An altar once we're fighting -- or straight away if an enemy priest is down and
+  // waiting to be collected.
+  bool foeDown = false;
+  for (auto& e : sim.entities())
+    foeDown |= e.alive && e.role == Role::Priest && e.immobile && e.owner != player_ && !sim.allied(e.owner, player_);
+  if (!want && altars == 0 && (shooters >= 3 || foeDown)) want = sim.registryType("altar");
   if (!want) return;
   int x, y;
-  if (findSite(sim, world, priest->id, want, x, y)) sim.orderConstruct(priest->id, want->name, x, y);
+  std::string why = "no site for it";
+  if (tick_ < nextSiteSearch_) return;  // the site search scans the whole map: once a second is plenty
+  nextSiteSearch_ = tick_ + 20;
+  bool ok = findSite(sim, world, priest->id, want, x, y) && sim.orderConstruct(priest->id, want->name, x, y, &why);
+  if (!ok && std::getenv("NS_DEBUG_PRIEST") && tick_ % 600 < 20)
+    sim.log("P" + std::to_string(player_) + " AI priest couldn't build " + want->name + ": " + why);
 }
 
 // Our territory cell closest to the nearest enemy building: where new
@@ -250,6 +284,11 @@ void SkirmishAi::produce(Sim& sim) {
     // Any altar counts here, even half-built: it's already paid for, so don't keep hoarding for one.
     if (e.alive && e.owner == player_) altars += e.role == Role::Altar, shooters += e.role == Role::Shooter;
   float reserve = (altars == 0 && shooters >= 3) ? 600.0f : 0.0f;
+  {  // never spend the price of a golem while we're short of them: golems are our income
+    int golems = 0;
+    for (auto& e : sim.entities()) golems += e.alive && e.owner == player_ && e.role == Role::Golem;
+    if (golems < 2) reserve = std::max(reserve, float(Sim::kGolemCost));
+  }
   float frontX = 0, frontY = 0;
   bool haveFront = frontPoint(sim, player_, frontX, frontY);
   // Golems are our income: keep enough of them (bought at the temple, 400 each).

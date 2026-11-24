@@ -94,6 +94,7 @@ Entity* Sim::find(int id) {
 
 void Sim::step() {
   time_ += kDt;
+  ++tick_;
   for (size_t i = 0; i < ents_.size(); ++i) {
     Entity& e = ents_[i];
     if (!e.alive) continue;
@@ -1151,6 +1152,7 @@ struct Fnv {
 uint64_t Sim::stateHash() const {
   Fnv f;
   f.v(time_);
+  f.v(tick_);
   f.v(rng_);
   for (auto& e : ents_) {
     f.v(e.id), f.v(e.alive), f.v(e.owner), f.v(e.role), f.v(e.x), f.v(e.y), f.v(e.hp), f.v(e.job);

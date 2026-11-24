@@ -187,7 +187,9 @@ void WorldView::handle(const SDL_Event& e) {
           break;
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: issue({Command::Rotate}); break;
-        case SDLK_p: paused = !paused; break;
+        case SDLK_p:
+          if (!lockstep()) paused = !paused;
+          break;
         case SDLK_EQUALS:
         case SDLK_KP_PLUS: speed = std::min(4.0f, speed * 2); break;
         case SDLK_MINUS:
@@ -317,10 +319,25 @@ void WorldView::update(double dt) {
   time_ += dt;
   if (sim_ && !paused && dialogs_.empty() && forcedOutcome_ == 0) {
     simAcc_ += std::min(dt, 0.25) * speed;
+    if (lockstep()) speed = 1;  // everyone runs at the same pace
     while (simAcc_ >= Sim::kDt) {
+      if (netTick) {
+        std::vector<Command> cmds;
+        if (!netTick(sim_->tick(), cmds)) {  // waiting for other players' orders
+          simAcc_ = std::min(simAcc_, double(Sim::kDt));
+          break;
+        }
+        for (auto& c : cmds) sim_->apply(c);
+      }
+      if (autopilot && float(sim_->time()) >= nextAutopilot_) {
+        nextAutopilot_ = float(sim_->time()) + 2.0f;
+        autopilotStep();
+      }
       sim_->step();
       for (auto& ai : ais_)
-        if (ai.player() != player_ || aiForMe_) ai.step(*sim_, islands_[0]);
+        // The local "AI plays for me" acts directly on the sim, so it's off in
+        // lockstep games (it would desync); the autopilot issues commands instead.
+        if (ai.player() != player_ || (aiForMe_ && !lockstep())) ai.step(*sim_, islands_[0]);
       simAcc_ -= Sim::kDt;
       if (hasMission_) {
         for (auto& ev : script_.step(*sim_)) {
@@ -1435,6 +1452,128 @@ bool WorldView::issue(Command c, std::string* why) {
     return true;
   }
   return sim_->apply(c, why);
+}
+
+void WorldView::startSkirmish(const SkirmishConfig& cfg, int local) {
+  hasMission_ = false;
+  forcedOutcome_ = 0;
+  resultText_.clear();
+  dialogs_.clear();
+  islands_.clear();
+  Island world(1, 1);
+  std::vector<Placement> spawns;
+  generateSkirmish(gd_, cfg, world, spawns);
+  islands_.push_back(std::move(world));
+  sim_ = std::make_unique<Sim>(gd_, islands_[0], cfg.seed);
+  player_ = local;
+  for (auto& pl : spawns) sim_->spawn(gd_.registry.byName(pl.type), pl.owner, pl.x, pl.y);
+  // Rules, Knowledge, Storm Power, golems.
+  sim_->knowledgeGifts = true;
+  for (int p = 1; p <= 8; ++p) {
+    auto& ps = sim_->player(p);
+    ps.power = float(cfg.startPower);
+    ps.tech = sim_->starterKnowledge();
+    ps.allies = 0;
+    names_[size_t(p)] = cfg.slots[size_t(p - 1)].kind == SkirmishSlot::Closed ? ""
+                        : !cfg.slots[size_t(p - 1)].name.empty() ? cfg.slots[size_t(p - 1)].name
+                        : p == local ? "You"
+                        : cfg.slots[size_t(p - 1)].kind == SkirmishSlot::AI ? "AI " + std::to_string(p)
+                                                                           : "Player " + std::to_string(p);
+  }
+  for (int a = 1; a <= 8; ++a)
+    for (int b = 1; b <= 8; ++b)
+      if (a != b && cfg.slots[size_t(a - 1)].team && cfg.slots[size_t(a - 1)].team == cfg.slots[size_t(b - 1)].team)
+        sim_->player(a).allies |= uint16_t(1u << b);
+  const TypeInfo* golem = gd_.registry.byName("sunWalker");
+  for (auto& e : std::vector<Entity>(sim_->entities()))
+    if (e.role == Role::Temple && e.owner > 0 && golem)
+      for (int k = 0; k < 2; ++k) sim_->spawnWalkerNear(golem, e.owner, e.id);
+  // AIs only for AI slots (they run identically on every peer). The local human
+  // gets one too, but it only acts while "AI plays for me" is on.
+  ais_.clear();
+  for (int p = 1; p <= 8; ++p) {
+    bool ai = cfg.slots[size_t(p - 1)].kind == SkirmishSlot::AI;
+    if (ai || p == local) ais_.emplace_back(p, cfg.seed * 7919u + uint32_t(p) * 104729u);
+  }
+  missionTitle_ = "SKIRMISH";
+  selectedWorkshop_ = dropIndex_ = selected_ = -1;
+  frame(0, 0, float(islands_[0].width() * kCellW), float(islands_[0].height() * kCellH + 40));
+}
+
+// A simple bot that plays the local player purely through commands, so it's
+// safe in lockstep games and exercises the network path in tests.
+void WorldView::autopilotStep() {
+  if (!sim_ || sim_->eliminated(player_)) return;
+  Island& w = islands_[0];
+  auto& me = sim_->player(player_);
+  // 1. A bridge piece towards unclaimed land (or the enemy).
+  {
+    BridgeQueue probe = sim_->bridgeQueue(player_);
+    int x, y;
+    if (bestBridgeMove(w, probe, player_, x, y)) {
+      for (int r = 0; r < 4 && !(myQueue().current().cells == probe.current().cells); ++r) issue({Command::Rotate});
+      // In lockstep the rotations haven't happened yet: send the rotations, then the
+      // bridge for the rotated piece (all applied in order on the same tick).
+      issue({Command::Bridge, 0, x, y});
+    } else {
+      issue({Command::Rotate});
+    }
+  }
+  // 2. Priest: a sun workshop if we have none.
+  const Entity* priest = nullptr;
+  int workshops = 0;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.owner == player_) {
+      if (e.role == Role::Priest) priest = &e;
+      workshops += e.role == Role::Workshop;
+    }
+  if (priest && !priest->immobile && priest->job == Entity::Job::Idle && workshops == 0 && me.power >= 800) {
+    const TypeInfo* f = gd_.registry.byName("sunFactory");
+    for (int r = 2; r < 14 && f; ++r) {
+      bool done = false;
+      for (int dy = -r; dy <= r && !done; dy += 2)
+        for (int dx = -r; dx <= r && !done; dx += 2) {
+          int ax = int(priest->x) + dx, ay = int(priest->y) + dy;
+          if (sim_->canConstruct(priest->id, f, ax, ay)) {
+            issue({Command::Construct, 0, priest->id, ax, ay, "sunFactory"});
+            done = true;
+          }
+        }
+      if (done) break;
+    }
+  }
+  // 3. Workshops: build the most expensive affordable shooter (or a generator).
+  for (auto& e : sim_->entities()) {
+    if (!e.alive || e.owner != player_ || e.role != Role::Workshop || !e.building.empty() || me.ready.size() >= 2)
+      continue;
+    const TypeInfo* best = nullptr;
+    for (auto* t : sim_->buildable(e.id)) {
+      double cost = t->def->num("cost", 0);
+      bool useful = t->def->num("range", 0) > 0 || t->def->str("group") == "battery";
+      if (useful && cost <= me.power && (!best || cost > best->def->num("cost", 0))) best = t;
+    }
+    if (best) issue({Command::Build, 0, e.id, 0, 0, best->name});
+  }
+  // 4. Drop the first ready unit on the legal spot nearest an enemy building.
+  if (!me.ready.empty()) {
+    const TypeInfo* t = gd_.registry.byName(me.ready[0]);
+    float ex = w.width() / 2.0f, ey = w.height() / 2.0f, bestE = 1e18f;
+    float rx = priest ? priest->x : ex, ry = priest ? priest->y : ey;  // measure from our priest if we have one
+    for (auto& e : sim_->entities())
+      if (e.alive && e.owner > 0 && e.owner != player_ && !sim_->allied(e.owner, player_) && e.role != Role::Golem &&
+          e.role != Role::Flyer) {
+        float d = (e.x - rx) * (e.x - rx) + (e.y - ry) * (e.y - ry);
+        if (d < bestE) bestE = d, ex = e.x, ey = e.y;
+      }
+    int bx = -1, by = -1;
+    float bd = 1e18f;
+    for (int y = 2; y < w.height() - 2 && t; y += 2)
+      for (int x = 2; x < w.width() - 2; x += 2) {
+        float d = (x - ex) * (x - ex) + (y - ey) * (y - ey);
+        if (d < bd && sim_->canDropUnit(t, x, y, player_)) bd = d, bx = x, by = y;
+      }
+    if (bx >= 0) issue({Command::Drop, 0, 0, bx, by});
+  }
 }
 
 }  // namespace ns

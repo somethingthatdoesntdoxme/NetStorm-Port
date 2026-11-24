@@ -16,6 +16,7 @@
 #include "app/Viewer.h"
 #include "app/WorldView.h"
 #include "data/GameData.h"
+#include "net/Lan.h"
 #include "data/MissionInfo.h"
 #include "render/Renderer.h"
 
@@ -60,6 +61,9 @@ int main(int argc, char** argv) {
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
+  std::string lanHostCfg, lanJoin, lanName = "Player";
+  int lanPort = ns::LanSession::kPort;
+  bool autopilot = false;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -82,6 +86,11 @@ int main(int argc, char** argv) {
     else if (a == "--list-missions") listMissions = true;
     else if (a == "--json") json = true;
     else if (a == "--hash-every") hashEvery = std::atof(next().c_str());
+    else if (a == "--host") lanHostCfg = next();  // e.g. "HA" = me + 1 human + ... (H human, A ai)
+    else if (a == "--join") lanJoin = next();
+    else if (a == "--lan-port") lanPort = std::atoi(next().c_str());
+    else if (a == "--name") lanName = next();
+    else if (a == "--autopilot") autopilot = true;
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
@@ -175,6 +184,54 @@ int main(int argc, char** argv) {
     if (menuShot == "brief") clickFirst();                                         // -> briefing
     state = State::Menu;
   }
+  // ---- LAN (headless test hooks; the menus drive the same session) ----
+  ns::LanSession lan;
+  auto hookLan = [&]() {
+    world.startSkirmish(lan.config(), lan.localPlayer());
+    world.netIssue = [&](const ns::Command& c) { lan.issue(c); };
+    world.netTick = [&](uint32_t tick, std::vector<ns::Command>& out) {
+      return lan.tickCommands(tick, [&] { return world.sim()->stateHash(); }, out);
+    };
+    state = State::Game;
+    currentMission.clear();
+  };
+  if (!lanHostCfg.empty() || !lanJoin.empty()) {
+    std::string lerr;
+    bool ok;
+    if (!lanHostCfg.empty()) {
+      ns::SkirmishConfig cfg;
+      cfg.seed = 4242;
+      cfg.mapSize = 0;
+      const char* furies[3] = {"rain", "wind", "thunder"};
+      for (size_t i = 0; i < lanHostCfg.size() && i < 8; ++i) {
+        cfg.slots[i].kind = lanHostCfg[i] == 'A' ? ns::SkirmishSlot::AI : ns::SkirmishSlot::Human;
+        cfg.slots[i].fury = furies[i % 3];
+      }
+      ok = lan.host(lanName, cfg, uint16_t(lanPort), &lerr);
+    } else {
+      ok = lan.join(lanJoin, lanName, uint16_t(lanPort), &lerr);
+    }
+    if (!ok) {
+      std::fprintf(stderr, "LAN: %s\n", lerr.c_str());
+      return 4;
+    }
+    // Lobby: wait (up to 60 s) for everyone, then start.
+    Uint64 t0 = SDL_GetTicks64();
+    while (SDL_GetTicks64() - t0 < 60000) {
+      lan.poll();
+      if (lan.role() == ns::LanSession::Role::Host && lan.humansWaiting() == 0) lan.start();
+      if (lan.justStarted()) break;
+      if (lan.state() == ns::LanSession::State::Ended) break;
+      SDL_Delay(5);
+    }
+    if (lan.state() != ns::LanSession::State::Playing) {
+      std::fprintf(stderr, "LAN: battle didn't start (%s)\n", lan.status.c_str());
+      return 4;
+    }
+    std::printf("LAN: battle started, I am player %d\n", lan.localPlayer());
+    hookLan();
+  }
+  world.autopilot = autopilot;
   if (aiBoth) world.setAiForMe(true);
   if (testGift) world.debugGrantGift();
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
@@ -185,8 +242,27 @@ int main(int argc, char** argv) {
   if (simulate > 0) {
     float before = world.sim() ? world.sim()->player(world.player()).power : 0;
     double nextCheck = 1, nextHash = hashEvery;
-    for (double t = 0; t < simulate; t += 1.0 / 30) {
+    Uint64 wall0 = SDL_GetTicks64();
+    for (double t = 0; world.sim() ? world.sim()->time() < simulate : t < simulate; t += 1.0 / 30) {
+      if (lan.role() != ns::LanSession::Role::None) {
+        lan.poll();
+        if (lan.desync) {
+          std::printf("LAN: %s\n", lan.status.c_str());
+          break;
+        }
+        if (lan.state() == ns::LanSession::State::Ended) {
+          std::printf("LAN: %s\n", lan.status.c_str());
+          break;
+        }
+        if (SDL_GetTicks64() - wall0 > Uint64(simulate) * 1000 + 120000) {
+          std::printf("LAN: timed out (%s)\n", lan.status.c_str());
+          break;
+        }
+      }
+      uint32_t before = world.sim() ? world.sim()->tick() : 0;
       world.update(1.0 / 30);
+      if (lan.role() != ns::LanSession::Role::None && world.sim() && world.sim()->tick() == before) SDL_Delay(1);
+      t = world.sim() ? world.sim()->time() : t;
       endTime = t;
       if (validate && world.sim() && t >= nextCheck) {
         nextCheck += 1;

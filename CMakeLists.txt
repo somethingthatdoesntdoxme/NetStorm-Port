@@ -38,6 +38,9 @@ add_library(nscore STATIC
   src/game/Ai.cpp
   src/game/MissionScript.cpp
   src/game/Command.cpp
+  src/game/Skirmish.cpp
+  src/net/Socket.cpp
+  src/net/Lan.cpp
 )
 target_include_directories(nscore PUBLIC src)
 if(MSVC)
@@ -93,4 +96,8 @@ if(NETSTORM_DATA)
   add_test(NAME knowledge COMMAND test_knowledge ${NETSTORM_DATA})
   add_test(NAME air COMMAND test_air ${NETSTORM_DATA})
   add_test(NAME data COMMAND test_data ${NETSTORM_DATA})
+endif()
+
+if(WIN32)
+  target_link_libraries(nscore PUBLIC ws2_32)
 endif()

@@ -11,6 +11,7 @@ step() { echo; echo "== $1"; shift; "$@" || fail=1; }
 step "unit + data tests"  ctest --test-dir build --output-on-failure
 step "determinism"        python3 tools/test/determinism.py --data "$DATA"
 step "screens"            python3 tools/test/screens.py --data "$DATA"
+step "LAN lockstep"       python3 tools/test/lan.py --data "$DATA"
 if [ "${2:-}" = "--full" ]; then
   step "campaign sweep (all)"   python3 tools/test/sweep.py --data "$DATA" --seconds 1800
 else

@@ -13,6 +13,7 @@
 #include "game/Sim.h"
 #include "game/Ai.h"
 #include "game/MissionScript.h"
+#include "game/Skirmish.h"
 
 #include <array>
 #include <memory>
@@ -36,6 +37,8 @@ class WorldView {
   void draw();
   bool wantsQuit() const { return quit_; }
   void buildTestScene(uint32_t seed);
+  // Skirmish/LAN battle from a setup (same on every peer). `local` = the player we control.
+  void startSkirmish(const SkirmishConfig& cfg, int local);
   // Loads mission `index` from the script archive (sorted list of .fort files).
   bool loadMission(int index);
   bool loadMissionByName(const std::string& part);
@@ -53,6 +56,12 @@ class WorldView {
     return "[" + k + "] " + std::to_string(s.buttons.size()) + " button(s)";
   }
   std::function<void(const Command&)> netIssue;  // set by the LAN session
+  // Lockstep gate: before simulating tick T, fetch every player's commands for T.
+  // Returns false while they haven't arrived (the game waits).
+  std::function<bool(uint32_t tick, std::vector<Command>& out)> netTick;
+  bool lockstep() const { return bool(netTick); }
+  // Command-only bot for the local player (LAN-safe "AI plays for me"; used by tests).
+  bool autopilot = false;
   bool abortRequested = false, restartRequested = false;  // from script buttons
   SDL_Color colourOf(int owner) const;
   bool paused = false;
@@ -86,6 +95,8 @@ class WorldView {
   // Every order goes through here: applied now in local play, or handed to the
   // network (netIssue) to be applied on every peer at the same tick.
   bool issue(Command c, std::string* why = nullptr);
+  void autopilotStep();
+  float nextAutopilot_ = 0;
   void drawDialog();
   void drawGift();
   bool handleGift(const SDL_Event& e);

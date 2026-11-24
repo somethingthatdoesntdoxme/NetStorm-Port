@@ -191,6 +191,7 @@ class Sim {
   const std::vector<Entity>& entities() const { return ents_; }
   Entity* find(int id);
   PlayerState& player(int p) { return players_[size_t(std::clamp(p, 0, 8))]; }
+  uint32_t tick() const { return tick_; }
   double time() const { return time_; }
   // Game event log ("[12s] P1 priest immobilised").
   const std::vector<std::string>& events() const { return events_; }
@@ -218,6 +219,7 @@ class Sim {
   const GameData& gd_;
   Island& world_;
   std::array<BridgeQueue, 9> queues_;
+  uint32_t tick_ = 0;
   uint32_t rng_ = 0x9E3779B9u;  // deterministic (lockstep-safe) chance rolls
   uint32_t roll() { rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5; return rng_; }
   std::vector<Entity> ents_;

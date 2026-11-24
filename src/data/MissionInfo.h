@@ -54,7 +54,7 @@ struct MissionInfo {
 };
 
 // Plain-text conversion of the original's HTML-ish markup.
-class GameData;
+struct GameData;  // must match the definition: MSVC mangles class and struct differently
 // Parses d/<id>.english and adds the shared sections from d/tell.english
 // (e.g. [TryAgain], used by every mission's failure screen) that the
 // mission doesn't define itself.

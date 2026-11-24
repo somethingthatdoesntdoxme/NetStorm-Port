@@ -4,6 +4,9 @@ project(NetStormPort LANGUAGES CXX)
 # Lockstep networking needs bit-identical float maths on every platform.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-ffp-contract=off)
+  # class/struct mismatches are harmless here but break MSVC's linker (it mangles them
+  # differently), so catch them on Linux too.
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Werror=mismatched-tags>)
 elseif(MSVC)
   # /bigobj: big translation units (WorldView) exceed MSVC's default section limit.
   add_compile_options(/fp:precise /bigobj /utf-8 /permissive-)

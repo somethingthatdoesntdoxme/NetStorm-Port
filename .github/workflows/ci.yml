@@ -81,3 +81,53 @@ jobs:
           ./build/netstorm-relay --port 27999 > relay.log 2>&1 &
           sleep 1
           grep -q "listening" relay.log && kill %1
+
+      # ---- Downloadable builds (Actions tab -> a run -> Artifacts) ----
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          d=dist/NetStorm-Port
+          mkdir -p "$d"
+          cp build/Release/netstorm.exe build/Release/netstorm-relay.exe "$d/"
+          cp build/Release/*.dll "$d/" 2>/dev/null || true
+          [ -f "$d/SDL2.dll" ] || cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/SDL2.dll" "$d/"
+          cp README.md "$d/"
+          printf '%s\r\n' "NetStorm Port - Windows" "" \
+            "1. Copy this folder anywhere (or into your NetStorm folder)." \
+            "2. Run netstorm.exe. If it can't find NetStorm's data it asks you to drag your NetStorm folder onto its window." \
+            "3. netstorm-relay.exe is the optional internet relay server (see README)." > "$d/HOW-TO-PLAY.txt"
+          ls -la "$d"
+
+      - name: Package (Linux / Steam Deck)
+        if: runner.os == 'Linux'
+        run: |
+          d=dist/NetStorm-Port
+          mkdir -p "$d"
+          cp build/netstorm build/netstorm-relay README.md "$d/"
+          cat > "$d/netstorm.sh" <<'EOS'
+          #!/bin/sh
+          # Runs NetStorm Port from wherever this folder is. Needs SDL2 (on SteamOS it's already there;
+          # on Debian/Ubuntu: sudo apt install libsdl2-2.0-0).
+          cd "$(dirname "$0")" && exec ./netstorm "$@"
+          EOS
+          chmod +x "$d/netstorm.sh" "$d/netstorm" "$d/netstorm-relay"
+          printf '%s\n' "NetStorm Port - Linux / Steam Deck" "" \
+            "Run ./netstorm.sh (on Steam Deck: add it to Steam as a non-Steam game to play in Game Mode)." \
+            "If it can't find NetStorm's data it asks you to drag your NetStorm folder onto its window," \
+            "or run: ./netstorm.sh --data /path/to/Netstorm" > "$d/HOW-TO-PLAY.txt"
+          tar -C dist -czf NetStorm-Port-linux.tar.gz NetStorm-Port
+          ls -la dist/NetStorm-Port NetStorm-Port-linux.tar.gz
+
+      - name: Upload (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetStorm-Port-windows
+          path: dist/NetStorm-Port
+
+      - name: Upload (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetStorm-Port-linux
+          path: NetStorm-Port-linux.tar.gz

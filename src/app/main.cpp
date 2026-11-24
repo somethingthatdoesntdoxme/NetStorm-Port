@@ -7,6 +7,7 @@
 //               --screenshot out.bmp [--menu title|chapters|missions|brief]
 #include <SDL.h>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include "net/Lan.h"
 #include "data/MissionInfo.h"
 #include "render/Renderer.h"
+#include "render/TinyFont.h"
 
 namespace {
 void printStats(ns::WorldView& world, float before, double simulate, const ns::GameData& gd) {
@@ -44,8 +46,94 @@ void printStats(ns::WorldView& world, float before, double simulate, const ns::G
 }
 }  // namespace
 
+// ---- Finding the player's NetStorm install ----------------------------------------
+
+static std::string prefFile(const char* name) {
+  char* p = SDL_GetPrefPath("NetStormPort", "NetStorm");
+  if (!p) return "";
+  std::string s = std::string(p) + name;
+  SDL_free(p);
+  return s;
+}
+
+static void rememberData(const std::string& dir) {
+  if (FILE* f = std::fopen(prefFile("datapath.txt").c_str(), "wb")) {
+    std::fwrite(dir.data(), 1, dir.size(), f);
+    std::fclose(f);
+  }
+}
+
+// Looks where the data usually is: last time's folder, next to the game, a
+// "Netstorm" folder beside it, the current folder. With `ask`, opens a window
+// asking for the folder to be dropped on it (remembered for next time).
+static bool findData(ns::GameData& gd, std::string& dir, std::string& err, bool ask) {
+  std::vector<std::string> tries;
+  if (FILE* f = std::fopen(prefFile("datapath.txt").c_str(), "rb")) {
+    char buf[1024];
+    size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    tries.push_back(std::string(buf, n));
+  }
+  if (char* base = SDL_GetBasePath()) {
+    std::string b = base;
+    SDL_free(base);
+    tries.push_back(b);
+    tries.push_back(b + "Netstorm");
+    tries.push_back(b + "NetStorm");
+    tries.push_back(b + "..");
+  }
+  tries.push_back(".");
+  tries.push_back("Netstorm");
+  for (auto& t : tries)
+    if (!t.empty() && gd.load(t, &err)) {
+      dir = t;
+      return true;
+    }
+  if (!ask) return false;
+  // Nothing found: ask for the folder to be dropped on a window.
+  SDL_Init(SDL_INIT_VIDEO);
+  SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
+  SDL_Window* w = SDL_CreateWindow("NetStorm - where is your NetStorm folder?", SDL_WINDOWPOS_CENTERED,
+                                   SDL_WINDOWPOS_CENTERED, 900, 300, SDL_WINDOW_SHOWN);
+  SDL_Renderer* r = w ? SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : nullptr;
+  if (!r) return false;
+  std::string msg;
+  bool found = false, quit = false;
+  while (!found && !quit) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+      if (e.type == SDL_QUIT) quit = true;
+      if (e.type == SDL_DROPFILE) {
+        std::string path = e.drop.file;
+        SDL_free(e.drop.file);
+        if (gd.load(path, &err)) {
+          dir = path;
+          rememberData(path);
+          found = true;
+        } else {
+          msg = "That folder doesn't have NetStorm's data (" + err + ")";
+        }
+      }
+    }
+    SDL_SetRenderDrawColor(r, 14, 16, 30, 255);
+    SDL_RenderClear(r);
+    ns::drawText(r, 30, 40, 3, "DRAG YOUR NETSTORM FOLDER", {255, 220, 110, 255});
+    ns::drawText(r, 30, 80, 3, "ONTO THIS WINDOW", {255, 220, 110, 255});
+    ns::drawText(r, 30, 140, 2, "(THE ONE WITH NETSTORM.EXE AND NETSTORM.TARC IN IT.", {200, 200, 210, 255});
+    ns::drawText(r, 30, 165, 2, " IT'S REMEMBERED FOR NEXT TIME.)", {200, 200, 210, 255});
+    std::string up = msg;
+    for (auto& c : up) c = char(std::toupper(static_cast<unsigned char>(c)));
+    if (!up.empty()) ns::drawText(r, 30, 230, 2, up.substr(0, 70), {255, 120, 110, 255});
+    SDL_RenderPresent(r);
+    SDL_Delay(16);
+  }
+  SDL_DestroyRenderer(r);
+  SDL_DestroyWindow(w);
+  return found;
+}
+
 int main(int argc, char** argv) {
-  std::string dataDir = ".", shot, mission, campaign, menuShot;
+  std::string dataDir, shot, mission, campaign, menuShot;
   int startSet = -1, autobuild = 0;
   double simulate = 0;
   bool demo = false, aiBoth = false, sprites = false, stopAtNote = false;
@@ -111,7 +199,13 @@ int main(int argc, char** argv) {
 
   ns::GameData gd;
   std::string err;
-  if (!gd.load(dataDir, &err)) {
+  if (dataDir.empty() && !findData(gd, dataDir, err, shot.empty() && simulate <= 0 && !listMissions)) {
+    std::fprintf(stderr, "Couldn't find NetStorm's data. Run with --data <your NetStorm folder>.\n");
+    return 1;
+  }
+  if (!gd.archive.entries().empty()) {
+    // found by findData
+  } else if (!gd.load(dataDir, &err)) {
     std::fprintf(stderr, "Couldn't load NetStorm data from '%s': %s\n", dataDir.c_str(), err.c_str());
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NetStorm",
                              ("Couldn't load NetStorm data.\n\nPoint --data at your NetStorm folder.\n\n" + err).c_str(),

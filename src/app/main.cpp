@@ -230,12 +230,17 @@ int main(int argc, char** argv) {
       auto* sim = world.sim();
       std::string players;
       for (int p = 1; p <= 8; ++p) {
-        int n = 0;
-        for (auto& e : sim->entities()) n += e.alive && e.owner == p;
+        int n = 0, buildings = 0;
+        for (auto& e : sim->entities()) {
+          if (!e.alive || e.owner != p) continue;
+          ++n;
+          buildings += e.role != ns::Role::Golem && e.role != ns::Role::Priest && e.role != ns::Role::Flyer;
+        }
         if (!n) continue;
-        char buf[160];
-        std::snprintf(buf, sizeof buf, "%s\"p%d\":{\"units\":%d,\"power\":%.0f,\"delivered\":%d,\"out\":%s}",
-                      players.empty() ? "" : ",", p, n, sim->player(p).power, sim->player(p).delivered,
+        char buf[200];
+        std::snprintf(buf, sizeof buf,
+                      "%s\"p%d\":{\"units\":%d,\"buildings\":%d,\"power\":%.0f,\"delivered\":%d,\"out\":%s}",
+                      players.empty() ? "" : ",", p, n, buildings, sim->player(p).power, sim->player(p).delivered,
                       sim->eliminated(p) ? "true" : "false");
         players += buf;
       }

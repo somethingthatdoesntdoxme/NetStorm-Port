@@ -13,7 +13,44 @@ void SkirmishAi::step(Sim& sim, Island& world) {
   world_ = &world;
   if (tick_ % bridgeEvery_ == 7 % bridgeEvery_) {  // a bridge piece every few seconds
     int x, y;
-    bool moved = bestBridgeMove(world, queue_, player_, x, y);
+    bool moved = false;
+    std::vector<uint8_t> home;
+    for (auto& e : sim.entities())
+      if (e.alive && e.owner == player_ && (e.role == Role::Temple || (home.empty() && e.role == Role::Priest)))
+        home = walkableFrom(world, int(e.x), int(e.y));
+    const std::vector<uint8_t>* conn = home.empty() ? nullptr : &home;
+    // A downed enemy priest we can't walk to comes first: bridge to him.
+    if (const Entity* pr = sim.find(reachFor_);
+        pr && pr->alive && pr->immobile && pr->carriedBy < 0 && pr->chainedAt < 0 && tick_ - reachSince_ < 20 * 120) {
+      // Goal: the edge of the landmass he's on (land + bridges joined to his cell).
+      std::vector<std::pair<int, int>> goal;
+      std::vector<uint8_t> seen(size_t(world.width() * world.height()), 0);
+      std::vector<std::pair<int, int>> stack{{int(pr->x), int(pr->y)}};
+      auto solid = [&](int cx, int cy) { return world.filled(cx, cy) || world.bridgeAt(cx, cy); };
+      int visited = 0;
+      while (!stack.empty() && visited < 20000) {
+        auto [cx, cy] = stack.back();
+        stack.pop_back();
+        if (cx < 0 || cy < 0 || cx >= world.width() || cy >= world.height()) continue;
+        size_t k = size_t(cy * world.width() + cx);
+        if (seen[k] || !solid(cx, cy)) continue;
+        seen[k] = 1;
+        ++visited;
+        bool edge = false;
+        for (auto [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+          if (!solid(cx + dx, cy + dy)) edge = true;
+          stack.push_back({cx + dx, cy + dy});
+        }
+        if (edge && visited % 2 == 0) goal.push_back({cx, cy});
+      }
+      if (!goal.empty()) moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goal, 1, conn);
+      if (tick_ % 1200 < unsigned(bridgeEvery_))
+        sim.log("P" + std::to_string(player_) + " AI rescue-bridging: " + std::to_string(goal.size()) + " edge cells, " +
+                (moved ? "placing" : "no move"));
+    } else {
+      reachFor_ = -1;
+    }
+    if (!moved) moved = bestBridgeMove(world, queue_, player_, x, y, 0, nullptr, 0, conn);
     if (!moved) {  // nothing left to claim: get within shooting range of enemy buildings
       std::vector<std::pair<int, int>> goals;
       for (auto& e : sim.entities())
@@ -32,7 +69,7 @@ void SkirmishAi::step(Sim& sim, Island& world) {
       // Reached firing range but no room to place there? Keep pushing in with
       // tighter goals so the foothold gets wide enough for real units.
       for (int r = std::clamp(reach - 2, 5, 30); !goals.empty() && !moved && r >= 4; r -= 5)
-        moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, r);
+        moved = bestBridgeMove(world, queue_, player_, x, y, 0, &goals, r, conn);
     }
     if (moved) placeBridge(world, queue_.current(), x, y, player_);
     queue_.next();
@@ -161,6 +198,10 @@ void SkirmishAi::priestWork(Sim& sim, Island& world) {
         break;
       }
     if (golems.empty()) why = "no golems";
+    if (!sent && why.find("reach") != std::string::npos && reachFor_ != pr.id) {
+      reachFor_ = pr.id;  // bridging will head for him
+      reachSince_ = tick_;
+    }
     if (!sent && tick_ % 1200 == 11) sim.log("P" + std::to_string(player_) + " AI capture failed: " + why);
   }
   if (!priest || priest->immobile || priest->job != Entity::Job::Idle) return;
@@ -259,11 +300,22 @@ void SkirmishAi::produce(Sim& sim) {
     auto list = sim.buildable(w.id);
     float px = haveFront ? frontX : w.x, py = haveFront ? frontY : w.y;
     float power = sim.player(player_).power;
+    // Aviaries can't touch priests or transports and archers shred their flyers:
+    // at most two while this workshop can make ground firepower (powered or not --
+    // if it isn't powered we want a generator, not more aviaries).
+    int aviaries = 0;
+    for (auto& e : sim.entities())
+      aviaries += e.alive && e.owner == player_ && e.type && e.type->def && e.type->def->str("group") == "aviary";
+    bool groundKnown = false;
+    for (auto* t : list)
+      groundKnown |= t->def->num("range", 0) > 0 && t->def->str("group") != "aviary" &&
+                     t->def->str("group") != "anti-air";
     // Shooters that would actually work at the front (enough energy of the right kind).
     std::vector<const TypeInfo*> shooterTypes;
     bool unpowered = false;
     for (auto* t : list) {
       if (t->def->num("range", 0) <= 0) continue;
+      if (groundKnown && aviaries >= 2 && t->def->str("group") == "aviary") continue;
       int need = int(t->def->num("minUsage", 0));
       if (need > 0 && sim.energyAt(player_, t->def->str("theme"), int(px), int(py)) < need) {
         unpowered = true;
@@ -309,20 +361,6 @@ void SkirmishAi::produce(Sim& sim) {
                                           [&](const TypeInfo* t) {
                                             return std::find(w.slots.begin(), w.slots.end(), t->name) == w.slots.end();
                                           }),
-                           shooterTypes.end());
-    }
-    // Aviaries can't touch priests or transports, and archers shred their flyers:
-    // keep at most two and spend the rest on ground firepower (needed to knock
-    // the enemy priest down for capture).
-    {
-      int aviaries = 0;
-      for (auto& e : sim.entities())
-        aviaries += e.alive && e.owner == player_ && e.type && e.type->def && e.type->def->str("group") == "aviary";
-      bool ground = false;
-      for (auto* t : shooterTypes) ground |= t->def->str("group") != "aviary";
-      if (ground && aviaries >= 2)
-        shooterTypes.erase(std::remove_if(shooterTypes.begin(), shooterTypes.end(),
-                                          [](const TypeInfo* t) { return t->def->str("group") == "aviary"; }),
                            shooterTypes.end());
     }
     if (shooterTypes.empty()) continue;

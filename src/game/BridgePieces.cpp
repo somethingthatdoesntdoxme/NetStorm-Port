@@ -99,7 +99,13 @@ int placeBridge(Island& w, const BridgeShape& shape, int x, int y, int player) {
 }
 
 bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, int& outY, uint16_t enemyMask,
-                    const std::vector<std::pair<int, int>>* goals, int goalRadius) {
+                    const std::vector<std::pair<int, int>>* goals, int goalRadius,
+                    const std::vector<uint8_t>* connected) {
+  auto mine = [&](int mx, int my) {
+    if (!((w.filled(mx, my) && w.ownerAt(mx, my) == player) || w.bridgeAt(mx, my) == player)) return false;
+    return !connected || (mx >= 0 && my >= 0 && mx < w.width() && my < w.height() &&
+                          (*connected)[size_t(my) * size_t(w.width()) + size_t(mx)]);
+  };
   const int W = w.width(), H = w.height();
   // Distance (through open sky) to the nearest unowned land.
   std::vector<int> dist(size_t(W) * H, std::numeric_limits<int>::max());
@@ -123,7 +129,7 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
         dist[size_t(y) * W + x] = 0;
         q.push_back(y * W + x);
       }
-      if ((w.filled(x, y) && w.ownerAt(x, y) == player) || w.bridgeAt(x, y) == player) {
+      if (mine(x, y)) {
         minX = std::min(minX, x), maxX = std::max(maxX, x), minY = std::min(minY, y), maxY = std::max(maxY, y);
       }
     }
@@ -151,9 +157,7 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
       if (w.filled(x, y) || w.bridgeAt(x, y)) continue;
       const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
       for (auto& n : nb)
-        if ((w.filled(x + n[0], y + n[1]) && w.ownerAt(x + n[0], y + n[1]) == player) ||
-            w.bridgeAt(x + n[0], y + n[1]) == player)
-          current = std::min(current, dist[size_t(y) * W + x]);
+        if (mine(x + n[0], y + n[1])) current = std::min(current, dist[size_t(y) * W + x]);
     }
   if (current == 0) return false;  // already touching the target: nothing to bridge
   int best = std::numeric_limits<int>::max(), bx = 0, by = 0, brot = 0;
@@ -162,6 +166,12 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
     for (int y = std::max(1, minY - 5); y <= std::min(H - 2, maxY + 5); ++y)
       for (int x = std::max(1, minX - 5); x <= std::min(W - 2, maxX + 5); ++x) {
         if (!canPlaceBridge(w, s, x, y, player)) continue;
+        if (connected) {  // must grow from the part of our territory we can walk to
+          bool joined = false;
+          for (auto [dx, dy] : s.cells)
+            for (auto [nx, ny] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) joined |= mine(x + dx + nx, y + dy + ny);
+          if (!joined) continue;
+        }
         int score = std::numeric_limits<int>::max();
         for (auto [dx, dy] : s.cells) score = std::min(score, dist[size_t(y + dy) * W + x + dx]);
         if (score == std::numeric_limits<int>::max() || score >= current) continue;  // must make progress
@@ -176,4 +186,21 @@ bool bestBridgeMove(const Island& w, BridgeQueue& queue, int player, int& outX, 
   return true;
 }
 
+}  // namespace ns
+
+namespace ns {
+std::vector<uint8_t> walkableFrom(const Island& w, int fx, int fy) {
+  std::vector<uint8_t> seen(size_t(w.width()) * size_t(w.height()), 0);
+  std::vector<std::pair<int, int>> stack{{fx, fy}};
+  while (!stack.empty()) {
+    auto [x, y] = stack.back();
+    stack.pop_back();
+    if (x < 0 || y < 0 || x >= w.width() || y >= w.height()) continue;
+    size_t k = size_t(y) * size_t(w.width()) + size_t(x);
+    if (seen[k] || !(w.filled(x, y) || w.bridgeAt(x, y))) continue;
+    seen[k] = 1;
+    stack.push_back({x + 1, y}), stack.push_back({x - 1, y}), stack.push_back({x, y + 1}), stack.push_back({x, y - 1});
+  }
+  return seen;
+}
 }  // namespace ns

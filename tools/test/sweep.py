@@ -33,6 +33,13 @@ def run(binary, data, mission, seconds, timeout):
                 "stderr": p.stderr[-800:]}
     res["status"] = "INVARIANT" if res["violations"] else ("WON" if res["outcome"] > 0 else
                                                            "LOST" if res["outcome"] < 0 else "UNFINISHED")
+    if res["status"] == "UNFINISHED":
+        # The community build's AIs only sacrifice priests at top difficulty, so a side
+        # reduced to its priest and transports is a stalemate, not an AI bug.
+        crippled = [k for k, v in res.get("players", {}).items() if not v["out"] and v.get("buildings", 1) == 0]
+        if crippled:
+            res["status"] = "STALEMATE"
+            res["crippled"] = crippled
     res["first_violations"] = violations
     res["wall"] = round(time.time() - t0)
     return res
@@ -45,6 +52,7 @@ def main():
     ap.add_argument("--seconds", type=int, default=1800)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     ap.add_argument("--filter", default="")
+    ap.add_argument("--missions", default="", help="comma-separated mission ids (overrides --filter)")
     ap.add_argument("--normal-only", action="store_true", help="skip Easy/Hard variants")
     ap.add_argument("--out", default="test-results")
     ap.add_argument("--require-finish", action="store_true")
@@ -54,6 +62,8 @@ def main():
     listing = subprocess.run([a.bin, "--data", a.data, "--list-missions"], capture_output=True, text=True, env=env)
     missions = [l.split("\t")[0] for l in listing.stdout.splitlines() if "\t" in l]
     missions = [m for m in missions if a.filter in m and not m.startswith("demo")]
+    if a.missions:
+        missions = [m for m in a.missions.split(",") if m]
     if a.normal_only:
         missions = [m for m in missions if not (m.endswith("easy") or m.endswith("hard"))]
     missions.sort()
@@ -73,7 +83,8 @@ def main():
     (out / "sweep.json").write_text(json.dumps(results, indent=1))
     md = ["| mission | result | game time | invariant breaks |", "|---|---|---|---|"]
     for r in results:
-        md.append(f"| {r['mission']} | {r['status']} | {r.get('seconds', '-')} | {r.get('violations', '-')} |")
+        st = r['status'] + (f" ({', '.join(r['crippled'])} has no buildings)" if r.get('crippled') else "")
+        md.append(f"| {r['mission']} | {st} | {r.get('seconds', '-')} | {r.get('violations', '-')} |")
     for r in results:
         for v in r.get("first_violations", [])[:3]:
             md.append(f"\n- `{r['mission']}`: {v}")

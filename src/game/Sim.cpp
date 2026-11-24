@@ -1013,12 +1013,15 @@ void Sim::stepFlyer(Entity& f) {
   float dx = gx - f.x, dy = gy - f.y, dist = std::sqrt(dx * dx + dy * dy);
   float want = std::atan2(dy, dx);
   if (dist < 3.0f) want += 1.3f;  // circle
+  if (!t && !based) want = f.heading + 1.3f;  // orphaned with nothing to hunt: circle where it is
   float diff = std::remainder(want - f.heading, 6.2831853f);
   float turn = 4.0f * kDt;  // rad/s
   f.heading += std::clamp(diff, -turn, turn);
   float speed = float(d.num("speed", 2.0)) * 4.0f;  // cells/s (flyers are much faster than walkers)
   f.x += std::cos(f.heading) * speed * kDt;
   f.y += std::sin(f.heading) * speed * kDt;
+  f.x = std::clamp(f.x, 0.0f, float(world_.width() - 1));  // never leave the map
+  f.y = std::clamp(f.y, 0.0f, float(world_.height() - 1));
   // Strafe: continuous damage while close.
   if (t && dist < 4.0f) {
     damage(*t, float(d.num("hpPerSec", 15)) * kDt);
@@ -1094,6 +1097,92 @@ bool Sim::chooseGift(int player, const std::string& pick) {
   }
   ps.giftAltar = -1;
   return true;
+}
+
+// ---- Testing ---------------------------------------------------------------
+
+namespace {
+struct Fnv {
+  uint64_t h = 1469598103934665603ull;
+  void bytes(const void* p, size_t n) {
+    auto* b = static_cast<const unsigned char*>(p);
+    for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+  }
+  template <class T>
+  void v(const T& x) {
+    bytes(&x, sizeof x);
+  }
+  void str(const std::string& s) { bytes(s.data(), s.size()), v(s.size()); }
+};
+}  // namespace
+
+uint64_t Sim::stateHash() const {
+  Fnv f;
+  f.v(time_);
+  f.v(rng_);
+  for (auto& e : ents_) {
+    f.v(e.id), f.v(e.alive), f.v(e.owner), f.v(e.role), f.v(e.x), f.v(e.y), f.v(e.hp), f.v(e.job);
+    f.v(e.target), f.v(e.carryingPriest), f.v(e.carriedBy), f.v(e.chainedAt), f.v(e.captive);
+    f.v(e.progress), f.v(e.built), f.v(e.cooldown), f.v(e.crystals), f.v(e.heading), f.v(e.life);
+    f.v(e.immobile), f.v(e.altarLevel), f.v(e.workshopLevel), f.v(e.path.size());
+    f.str(e.building);
+  }
+  for (int p = 0; p <= 8; ++p) {
+    const PlayerState& ps = players_[size_t(p)];
+    f.v(ps.power), f.v(ps.delivered), f.v(ps.giftAltar), f.v(ps.tech.size()), f.v(ps.ready.size());
+  }
+  f.v(shots_.size());
+  for (auto& pr : shots_) f.v(pr.t), f.v(pr.target), f.v(pr.damage);
+  for (int y = 0; y < world_.height(); ++y)
+    for (int x = 0; x < world_.width(); ++x) {
+      int o = world_.ownerAt(x, y), b = world_.bridgeAt(x, y);
+      bool fl = world_.filled(x, y);
+      f.v(o), f.v(b), f.v(fl);
+    }
+  return f.h;
+}
+
+std::vector<std::string> Sim::validate() const {
+  std::vector<std::string> bad;
+  auto say = [&](const Entity& e, const std::string& m) {
+    bad.push_back("#" + std::to_string(e.id) + " " + (e.type ? e.type->name : "?") + " (P" + std::to_string(e.owner) +
+                  "): " + m);
+  };
+  auto live = [&](int id) {
+    for (auto& o : ents_)
+      if (o.id == id) return o.alive;
+    return false;
+  };
+  for (auto& e : ents_) {
+    if (!e.alive) continue;
+    if (!std::isfinite(e.x) || !std::isfinite(e.y)) say(e, "position is NaN/inf");
+    else if (e.x < -2 || e.y < -2 || e.x > world_.width() + 2 || e.y > world_.height() + 2)
+      say(e, "out of the world at " + std::to_string(int(e.x)) + "," + std::to_string(int(e.y)));
+    if (e.hp > e.maxHp && e.maxHp > 0) say(e, "hp above max");
+    if (e.owner < 0 || e.owner > 8) say(e, "bad owner");
+    if (e.carriedBy >= 0 && !live(e.carriedBy)) say(e, "carried by a dead/missing unit");
+    if (e.chainedAt >= 0 && !live(e.chainedAt)) say(e, "chained at a dead/missing altar");
+    if (e.carriedBy >= 0 && e.chainedAt >= 0) say(e, "both carried and chained");
+    if (e.carryingPriest >= 0) {
+      bool ok = false;
+      for (auto& o : ents_)
+        if (o.id == e.carryingPriest && o.alive && o.carriedBy == e.id) ok = true;
+      if (!ok) say(e, "thinks it carries a priest that isn't carried by it");
+    }
+    if (e.role == Role::Altar && e.captive >= 0) {
+      bool ok = false;
+      for (auto& o : ents_)
+        if (o.id == e.captive && o.alive && o.chainedAt == e.id) ok = true;
+      if (!ok) say(e, "altar captive isn't chained to it");
+    }
+    if (e.role == Role::Flyer && e.life > 1000) say(e, "flyer with runaway lifetime");
+    if (e.role == Role::Workshop && int(e.slots.size()) > 1 + e.workshopLevel) say(e, "more slots than capacity");
+  }
+  for (int p = 0; p <= 8; ++p) {
+    const PlayerState& ps = players_[size_t(p)];
+    if (!std::isfinite(ps.power) || ps.power < -0.5f) bad.push_back("P" + std::to_string(p) + " Storm Power " + std::to_string(ps.power));
+  }
+  return bad;
 }
 
 }  // namespace ns

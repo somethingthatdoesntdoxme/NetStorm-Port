@@ -114,6 +114,12 @@ class Sim {
   // Spawns a walker on a free walkable cell next to building `nearId`.
   int spawnWalkerNear(const TypeInfo* t, int owner, int nearId);
   void step();  // one fixed tick
+  // ---- Testing ----
+  // Hash of the whole simulation state; two runs from the same start with the
+  // same orders must match tick for tick (lockstep networking depends on it).
+  uint64_t stateHash() const;
+  // Invariant checks; returns one line per problem (empty = healthy).
+  std::vector<std::string> validate() const;
   // Route for a mobile unit: straight line for airborne transports, else a walking path.
   std::vector<std::pair<int, int>> route(const Entity& e, int tx, int ty) const;
   // Knowledge from sacrifice (skirmish/multiplayer). When enabled, a finished

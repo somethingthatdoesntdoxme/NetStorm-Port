@@ -35,6 +35,7 @@ struct ScriptSection {
   std::vector<std::string> keys;
   std::string text;  // plain text
   std::vector<ScriptButton> buttons;
+  bool shared = false;  // came from d/tell.english, not the mission's own script
 };
 
 struct MissionInfo {
@@ -53,6 +54,12 @@ struct MissionInfo {
 };
 
 // Plain-text conversion of the original's HTML-ish markup.
+class GameData;
+// Parses d/<id>.english and adds the shared sections from d/tell.english
+// (e.g. [TryAgain], used by every mission's failure screen) that the
+// mission doesn't define itself.
+MissionInfo loadMission(const GameData& gd, const std::string& id);
+
 std::string missionTextToPlain(const std::string& html);
 
 }  // namespace ns

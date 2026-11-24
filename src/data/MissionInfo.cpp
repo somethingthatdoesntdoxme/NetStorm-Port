@@ -1,8 +1,11 @@
 #include "data/MissionInfo.h"
 
+#include "data/GameData.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <set>
 #include <sstream>
 
@@ -83,6 +86,12 @@ std::string missionTextToPlain(const std::string& html) {
     space = false;
     clean += c;
   }
+  // Common HTML entities.
+  static const std::pair<const char*, const char*> ents[] = {
+      {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&nbsp;", " "}};
+  for (auto [from, to] : ents)
+    for (size_t p = clean.find(from); p != std::string::npos; p = clean.find(from, p + std::strlen(to)))
+      clean.replace(p, std::strlen(from), to);
   size_t a = clean.find_first_not_of("\n ");
   return a == std::string::npos ? "" : clean.substr(a);
 }
@@ -229,6 +238,20 @@ MissionInfo MissionInfo::parse(const std::string& text, const std::string& id) {
     m.success = body(all);
   }
   m.failure = body(findSection("failed"));
+  return m;
+}
+
+MissionInfo loadMission(const GameData& gd, const std::string& id) {
+  MissionInfo m = MissionInfo::parse(gd.archive.text("d/" + id + ".english"), id);
+  MissionInfo shared = MissionInfo::parse(gd.archive.text("d/tell.english"), "tell");
+  for (auto& sec : shared.script) {
+    bool have = false;
+    for (auto& k : sec.keys) have |= m.section(k) != nullptr;
+    if (!have) {
+      m.script.push_back(sec);
+      m.script.back().shared = true;
+    }
+  }
   return m;
 }
 

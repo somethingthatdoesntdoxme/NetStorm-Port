@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Install SDL2 (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install sdl2:x64-windows
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # Game data can't be shipped, so CI runs the data-free tests; the
+      # data-driven suites (tools/test/run_all.sh) run on a machine with an install.
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Missing-data smoke test (must fail cleanly, not crash)
+        if: runner.os == 'Linux'
+        run: |
+          set +e
+          SDL_VIDEODRIVER=offscreen ./build/netstorm --data /nonexistent --screenshot /tmp/x.bmp
+          code=$?
+          echo "exit code $code"
+          test $code -eq 1

@@ -139,3 +139,25 @@ The type files stay authoritative for numbers; the FAQ fills in behaviour the da
 - With permanent slots the AI commits workshops to its strongest unit first and keeps a slot for a generator; Vander Towers only when the enemy flies; at most two aviaries while ground units are available.
 - Once its shooters outnumber an enemy's, the AI aims new units at that enemy's priest (the win condition).
 - Known weakness: AI-vs-AI in TheWarBegins / GuardMyBack can stall against fortified bases (human-vs-AI unaffected); skirmish ends ~6 min.
+
+## Automated testing
+- `ctest` (build with `-DNETSTORM_DATA=<install>`): core (data-free, runs in CI), sacrifice, knowledge, air, data.
+  The data test parses all 58 playable missions, builds every map, walks the 16-mission campaign chain in all three
+  difficulties, checks every scripted Tell target exists, and decodes all 4124 sprite frames.
+- `Sim::validate()` invariant checks (positions, carried/chained priests, altar captives, slots, Storm Power) run every
+  game-second with `--validate`; `Sim::stateHash()` + `--hash-every N` for lockstep determinism.
+- `tools/test/determinism.py`: same game twice, hashes must match at every checkpoint.
+- `tools/test/screens.py`: renders all menus and several game views headless, fails on blank/broken frames.
+- `tools/test/sweep.py`: every mission AI-vs-AI with invariants, report in test-results/sweep.{md,json}.
+- `tools/test/bisect_mission.sh`: `git bisect run` helper that builds each commit and plays a mission.
+- `tools/test/run_all.sh <install> [--full]`: everything above.
+- CI (.github/workflows/ci.yml): Linux + Windows build, data-free tests, missing-data smoke test.
+
+Found by the new tests and fixed: failure screens' Continue button pointed at [TryAgain] in the shared tell.english
+(now merged into every mission); orphaned Man o' Wars flew off the map forever; RunForIt has an object with an
+unresolvable type id (skipped, as the original must have); AI hoarded 600 Storm Power for an altar it had already
+paid for (found by bisect).
+
+Known from the sweep (AI-vs-AI, normal difficulty, 20 game-minutes): the AI playing the human side wins none of the
+campaign missions (7 lost, 17 unfinished) - the AI needs a strength pass. BreakingThrough is lost in ~95 s because
+the engine's island placement (an approximation) puts the player's start inside enemy crossbow range.

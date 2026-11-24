@@ -41,7 +41,7 @@ Frontend::Frontend(Renderer& r, const GameData& gd) : r_(r), gd_(gd) {
     if (name.size() < 9 || name.compare(name.size() - 8, 8, ".english") != 0) continue;
     std::string id = name.substr(name.rfind('/') + 1);
     id = id.substr(0, id.size() - 8);
-    MissionInfo m = MissionInfo::parse(std::string(bytes.begin(), bytes.end()), id);
+    MissionInfo m = loadMission(gd, id);
     if (!gd.archive.find("d/" + m.fort + ".fort")) continue;
     missions_.push_back(std::move(m));
   }

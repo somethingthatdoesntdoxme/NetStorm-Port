@@ -30,6 +30,7 @@ struct MissionWorld {
   std::vector<MissionObject> objects;
   int minX = 0, minY = 0, maxX = 0, maxY = 0;  // used cell bounds
   int unplaced = 0;                            // objects with no sprite type
+  std::vector<std::string> unplacedTypes;
 };
 
 bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, uint32_t seed = 1);

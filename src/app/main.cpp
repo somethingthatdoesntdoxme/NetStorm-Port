@@ -10,11 +10,13 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "app/Frontend.h"
 #include "app/Viewer.h"
 #include "app/WorldView.h"
 #include "data/GameData.h"
+#include "data/MissionInfo.h"
 #include "render/Renderer.h"
 
 namespace {
@@ -56,6 +58,8 @@ int main(int argc, char** argv) {
   int stopAtAir = 0;
   bool testGift = false;
   bool stopAtBalloon = false;
+  bool validate = false, json = false, listMissions = false;
+  double hashEvery = 0;
   ns::WindowConfig wc;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -74,6 +78,10 @@ int main(int argc, char** argv) {
     else if (a == "--stop-at-note") stopAtNote = true;
     else if (a == "--test-gift") testGift = true;
     else if (a == "--stop-at-balloon") stopAtBalloon = true;
+    else if (a == "--validate") validate = true;
+    else if (a == "--list-missions") listMissions = true;
+    else if (a == "--json") json = true;
+    else if (a == "--hash-every") hashEvery = std::atof(next().c_str());
     else if (a == "--stop-at-air") stopAtAir = std::atoi(next().c_str());
     else if (a == "--ai-both") aiBoth = true;
     else if (a == "--size") {
@@ -96,6 +104,16 @@ int main(int argc, char** argv) {
   }
   std::printf("Loaded %zu scripts, %zu types, %d sprite sets / %d frames\n", gd.archive.entries().size(),
               gd.types.size(), gd.shapes.setCount(), gd.shapes.totalFrames());
+  if (listMissions) {  // id <tab> title, for test scripts
+    for (auto& [name, bytes] : gd.archive.entries()) {
+      if (name.size() < 9 || name.compare(name.size() - 8, 8, ".english") != 0) continue;
+      std::string id = name.substr(name.rfind('/') + 1);
+      id = id.substr(0, id.size() - 8);
+      ns::MissionInfo m = ns::loadMission(gd, id);
+      if (gd.archive.find("d/" + m.fort + ".fort")) std::printf("%s\t%s\n", id.c_str(), m.title.c_str());
+    }
+    return 0;
+  }
   if (!shot.empty()) wc.hidden = true, wc.vsync = false;
 
   ns::Renderer r;
@@ -161,10 +179,26 @@ int main(int argc, char** argv) {
   if (testGift) world.debugGrantGift();
   if (autobuild > 0) std::printf("auto-built %d bridge pieces\n", world.autoBuild(autobuild));
   if (demo) std::printf("demo: started building %s\n", world.demoProduction().c_str());
+  int violations = 0;
+  double endTime = 0;
+  std::vector<std::string> firstViolations;
   if (simulate > 0) {
     float before = world.sim() ? world.sim()->player(world.player()).power : 0;
+    double nextCheck = 1, nextHash = hashEvery;
     for (double t = 0; t < simulate; t += 1.0 / 30) {
       world.update(1.0 / 30);
+      endTime = t;
+      if (validate && world.sim() && t >= nextCheck) {
+        nextCheck += 1;
+        for (auto& v : world.sim()->validate()) {
+          ++violations;
+          if (firstViolations.size() < 10) firstViolations.push_back("[" + std::to_string(int(t)) + "s] " + v);
+        }
+      }
+      if (hashEvery > 0 && world.sim() && t >= nextHash) {
+        nextHash += hashEvery;
+        std::printf("HASH %.0f %016llx\n", world.sim()->time(), (unsigned long long)world.sim()->stateHash());
+      }
       if (world.outcome() != 0) {
         std::printf("game over after %.0fs: %s\n", t, world.outcome() > 0 ? "WON" : "LOST");
         break;
@@ -191,6 +225,26 @@ int main(int argc, char** argv) {
       }
     }
     printStats(world, before, simulate, gd);
+    for (auto& v : firstViolations) std::printf("VIOLATION %s\n", v.c_str());
+    if (json && world.sim()) {
+      auto* sim = world.sim();
+      std::string players;
+      for (int p = 1; p <= 8; ++p) {
+        int n = 0;
+        for (auto& e : sim->entities()) n += e.alive && e.owner == p;
+        if (!n) continue;
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "%s\"p%d\":{\"units\":%d,\"power\":%.0f,\"delivered\":%d,\"out\":%s}",
+                      players.empty() ? "" : ",", p, n, sim->player(p).power, sim->player(p).delivered,
+                      sim->eliminated(p) ? "true" : "false");
+        players += buf;
+      }
+      std::printf("RESULT {\"mission\":\"%s\",\"outcome\":%d,\"seconds\":%.0f,\"violations\":%d,"
+                  "\"hash\":\"%016llx\",\"players\":{%s}}\n",
+                  !campaign.empty() ? campaign.c_str() : "skirmish", world.outcome(), endTime, violations,
+                  (unsigned long long)sim->stateHash(), players.c_str());
+    }
+    if (validate && violations) return 3;
   }
 
   auto drawFrame = [&]() {

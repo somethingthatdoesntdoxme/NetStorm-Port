@@ -75,9 +75,11 @@ bool buildMission(const GameData& gd, const FortFile& fort, MissionWorld& out, u
       fillRect(ax - 1, ay - 1, ax, ay, Element::Sun, o.player);
       return;
     }
+    if (o.type.empty()) return;  // type id not in the fort's name table (a quirk in RunForIt's data)
     const TypeInfo* t = gd.registry.byName(o.type);
     if (!t || t->set < 0 || !t->def) {
       ++out.unplaced;
+      out.unplacedTypes.push_back(o.type);
       return;
     }
     std::string ln = lower(o.type);

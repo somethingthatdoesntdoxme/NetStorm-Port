@@ -217,6 +217,37 @@ void WorldView::handle(const SDL_Event& e) {
           break;
         case SDLK_g: showGrid_ = !showGrid_; break;
         case SDLK_r: issue({Command::Rotate}); break;
+        case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5: case SDLK_6:
+          if (sim_) {  // pick a ready unit to drop
+            int i = int(e.key.keysym.sym - SDLK_1);
+            if (i < int(sim_->player(player_).ready.size())) {
+              dropIndex_ = dropIndex_ == i ? -1 : i;
+              selectedWorkshop_ = -1;
+              constructType_.clear();
+            }
+          }
+          break;
+        case SDLK_h: focusHome(cam_.zoom); break;
+        case SDLK_TAB:
+          if (sim_) {  // cycle through your golems
+            const Entity* first = nullptr;
+            const Entity* next = nullptr;
+            bool past = false;
+            for (auto& g : sim_->entities()) {
+              if (!g.alive || g.owner != player_ || g.role != Role::Golem) continue;
+              if (!first) first = &g;
+              if (past && !next) next = &g;
+              if (g.id == selected_) past = true;
+            }
+            if (!next) next = first;
+            if (next) {
+              selected_ = next->id;
+              selectedWorkshop_ = -1;
+              cam_.x = islands_[0].worldX + next->x * kCellW - kSidebarW * 0.5f / cam_.zoom;
+              cam_.y = islands_[0].worldY + next->y * kCellH;
+            }
+          }
+          break;
         case SDLK_p:
           if (!lockstep()) paused = !paused;
           break;
@@ -833,7 +864,8 @@ void WorldView::drawHud() {
     panel({cx - w / 2, float(cam_.screenH) - 50, w, 30});
     drawText(ren, cx - w / 2 + 10, float(cam_.screenH) - 42, 2, message_, red);
   }
-  drawTooltip();
+  if (radialShown_) drawRadial();
+  else drawTooltip();
 }
 
 void WorldView::drawCombat() {
@@ -994,14 +1026,27 @@ void WorldView::drawObjects() {
         SDL_RenderFillRectF(rr, &d);
       }
     }
-    // Health bar when damaged.
-    if (o.hp < o.maxHp && o.maxHp > 0 && o.built >= 1) {
-      float w = 20, f = std::max(0.0f, float(o.hp) / float(o.maxHp));
-      SDL_FRect bg = cam_.toScreen(wx - 16, wy + 2, w, 2), fg = cam_.toScreen(wx - 16, wy + 2, w * f, 2);
-      SDL_SetRenderDrawColor(r_.sdl(), 30, 0, 0, 220);
-      SDL_RenderFillRectF(r_.sdl(), &bg);
-      SDL_SetRenderDrawColor(r_.sdl(), f > 0.5f ? 80 : 255, f > 0.5f ? 220 : 160, 60, 255);
-      SDL_RenderFillRectF(r_.sdl(), &fg);
+    // Health bar when damaged (or selected): footprint-wide, above the sprite,
+    // outlined in the owner's colour, never thinner than 3 screen pixels.
+    if (o.maxHp > 0 && o.built >= 1 && (o.hp < o.maxHp || o.id == selected_ || o.id == selectedWorkshop_)) {
+      const SpriteTex& st = cache_.get(o.type->set, o.type->frame(base >= 0 ? base : anim));
+      int fx = o.type->def ? std::max(1, int(o.type->def->num("foot_x", 1))) : 1;
+      bool mobile = o.role == Role::Golem || o.role == Role::Priest || (o.type->def && o.type->def->hasFlag("walker"));
+      float w = mobile ? 18.0f : std::clamp(fx * kCellW - 6.0f, 18.0f, 64.0f);
+      float cx = mobile ? wx : wx - fx * kCellW / 2.0f + 1;
+      float top = st.tex ? wy + float(st.originY) - 5 : wy - 30;
+      float f = std::clamp(float(o.hp) / float(o.maxHp), 0.0f, 1.0f);
+      SDL_FRect bg = cam_.toScreen(cx - w / 2, top, w, 3);
+      bg.h = std::max(bg.h, 4.0f);
+      SDL_FRect outer{bg.x - 1, bg.y - 1, bg.w + 2, bg.h + 2};
+      SDL_Color oc = o.owner > 0 ? colourOf(o.owner) : SDL_Color{160, 160, 160, 255};
+      SDL_SetRenderDrawColor(rr, oc.r / 2, oc.g / 2, oc.b / 2, 230);
+      SDL_RenderFillRectF(rr, &outer);
+      SDL_SetRenderDrawColor(rr, 20, 6, 6, 230);
+      SDL_RenderFillRectF(rr, &bg);
+      SDL_FRect fg{bg.x, bg.y, bg.w * f, bg.h};
+      SDL_SetRenderDrawColor(rr, f > 0.6f ? 90 : f > 0.3f ? 240 : 255, f > 0.6f ? 220 : f > 0.3f ? 200 : 70, f > 0.6f ? 80 : 50, 255);
+      SDL_RenderFillRectF(rr, &fg);
     }
     // A golem carrying a crystal shows a little gold marker.
     if (o.role == Role::Golem && o.carrying) {

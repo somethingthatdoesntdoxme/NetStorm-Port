@@ -4,6 +4,8 @@
 // All panel art here is drawn procedurally (no original interface art); unit
 // thumbnails come from the player's own install via the sprite cache.
 #include <algorithm>
+#include <array>
+#include <functional>
 #include <cmath>
 
 #include "app/WorldView.h"
@@ -216,8 +218,9 @@ void WorldView::drawSidebar() {
       SDL_FRect r{pad + float(i % 3) * (tile + 6), y + float(i / 3) * (tile + 6), tile, tile};
       well(ren, r, hot(r), dropIndex_ == int(i));
       thumb(gd_.registry.byName(me.ready[i]), r);
+      drawText(ren, r.x + 4, r.y + 3, 2, std::to_string(i + 1), kGold);  // hotkey
       buttons_.push_back({r, "drop:" + std::to_string(i),
-                          pretty(me.ready[i]) + ". CLICK, THEN CLICK OPEN SKY NEXT TO YOUR LAND TO DROP IT."});
+                          pretty(me.ready[i]) + " (KEY " + std::to_string(i + 1) + "). CLICK, THEN CLICK OPEN SKY NEXT TO YOUR LAND TO DROP IT."});
     }
     y += float((std::min<size_t>(me.ready.size(), 6) + 2) / 3) * (tile + 6) + 4;
   }
@@ -324,7 +327,43 @@ void WorldView::drawSidebar() {
   }
 
   // --- Minimap ---
-  heading(ren, pad, H - mmH - pad - 20, iw, "MAP");
+  {
+    // Balance of power: each live side's share of hit points on the board
+    // plus land held, as one segmented strip beside the MAP heading.
+    float hy = H - mmH - pad - 20;
+    drawText(ren, pad, hy, 2, "MAP", SDL_Color{190, 170, 120, 255});
+    std::array<double, 9> str{};
+    for (auto& e : sim_->entities())
+      if (e.alive && e.owner > 0 && e.owner <= 8 && e.maxHp > 0) str[size_t(e.owner)] += e.hp;
+    if (!islands_.empty()) {
+      const Island& isl = islands_[0];
+      for (int yy = 0; yy < isl.height(); ++yy)
+        for (int xx = 0; xx < isl.width(); ++xx) {
+          int o = isl.ownerAt(xx, yy);
+          if (o > 0 && o <= 8 && isl.filled(xx, yy)) str[size_t(o)] += 4;
+        }
+    }
+    double total = 0;
+    for (int p = 1; p <= 8; ++p) if (sim_->outcome(p) >= 0) total += str[size_t(p)];
+    SDL_FRect bar{pad + 46, hy + 2, iw - 46, 10};
+    well(ren, bar);
+    std::string tip = "BALANCE OF POWER (UNITS, BUILDINGS AND LAND):";
+    if (total > 0) {
+      float x = bar.x + 1;
+      for (int p = 1; p <= 8; ++p) {
+        if (sim_->outcome(p) < 0 || str[size_t(p)] <= 0) continue;
+        float w = float(str[size_t(p)] / total) * (bar.w - 2);
+        SDL_Color c = colourOf(p);
+        SDL_FRect seg{x, bar.y + 1, w, bar.h - 2};
+        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
+        SDL_RenderFillRectF(ren, &seg);
+        x += w;
+        std::string n = p == player_ ? "YOU" : names_[size_t(p)].empty() ? "PLAYER " + std::to_string(p) : upper(names_[size_t(p)]);
+        tip += "\n\n" + n + " " + std::to_string(int(std::lround(str[size_t(p)] / total * 100))) + "%";
+      }
+    }
+    buttons_.push_back({bar, "", tip});
+  }
   drawMinimap({pad, H - mmH - pad, iw, mmH});
 }
 
@@ -452,6 +491,118 @@ void WorldView::drawTooltip() {
     drawWrapped(ren, x + 8, y + 6, w - 16, 2, b.tip, kWhite, y + h);
     return;
   }
+}
+
+}  // namespace ns
+
+namespace ns {
+
+// ---- Gamepad: camera and radial menu ----
+
+void WorldView::padCamera(float dx, float dy, float zoomDelta) {
+  cam_.x += dx / cam_.zoom;
+  cam_.y += dy / cam_.zoom;
+  if (zoomDelta != 0) cam_.zoom = std::clamp(cam_.zoom * (1 + zoomDelta * 1.6f), 0.5f, 12.0f);
+}
+
+void WorldView::padRadial(bool open) {
+  if (!sim_) return;
+  if (open) {
+    // Everything the sidebar offers right now that's an action: ready units,
+    // the build grid of the selection, golem, upgrade.
+    radial_.clear();
+    const auto& ready = sim_->player(player_).ready;
+    for (auto& b : buttons_) {
+      const std::string& a = b.action;
+      RadialItem it{a, "", ""};
+      if (a.rfind("drop:", 0) == 0) {
+        size_t i = size_t(std::atoi(a.c_str() + 5));
+        if (i >= ready.size()) continue;
+        it.type = ready[i];
+        it.label = pretty(it.type);
+      } else if (a.rfind("build:", 0) == 0 || a.rfind("construct:", 0) == 0) {
+        it.type = a.substr(a.find(':') + 1);
+        it.label = pretty(it.type);
+      } else if (a == "golem") {
+        it.label = "GOLEM";
+      } else if (a == "upgrade") {
+        it.label = "UPGRADE";
+      } else if (a == "rotate") {
+        it.label = "ROTATE";
+      } else {
+        continue;
+      }
+      radial_.push_back(it);
+    }
+    // Units and buildings first; golem/upgrade/rotate only if there's room.
+    std::stable_partition(radial_.begin(), radial_.end(), [](const RadialItem& r) { return !r.type.empty(); });
+    if (radial_.size() > 8) radial_.resize(8);
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+    radialX_ = std::clamp(float(mx), kSidebarW + 150.0f, float(cam_.screenW) - 150);
+    radialY_ = std::clamp(float(my), 150.0f, float(cam_.screenH) - 150);
+    radialSel_ = -1;
+    radialShown_ = !radial_.empty();
+    return;
+  }
+  // Released: do the chosen thing as if its sidebar button were clicked.
+  if (radialShown_ && radialSel_ >= 0 && radialSel_ < int(radial_.size())) {
+    for (auto& b : buttons_)
+      if (b.action == radial_[size_t(radialSel_)].action) {
+        handleUiClick(int(b.r.x + b.r.w / 2), int(b.r.y + b.r.h / 2));
+        break;
+      }
+  }
+  radialShown_ = false;
+  radialSel_ = -1;
+}
+
+void WorldView::padRadialAim(float x, float y) {
+  if (!radialShown_ || radial_.empty()) return;
+  if (x * x + y * y < 0.25f) {
+    radialSel_ = -1;
+    return;
+  }
+  const float pi = 3.14159265f;
+  float ang = std::atan2(y, x) + pi / 2;  // 0 = straight up
+  if (ang < 0) ang += 2 * pi;
+  int n = int(radial_.size());
+  radialSel_ = int(std::lround(ang / (2 * pi) * n)) % n;
+}
+
+void WorldView::drawRadial() {
+  if (!radialShown_) return;
+  SDL_Renderer* ren = r_.sdl();
+  const float pi = 3.14159265f, R = 110, tile = 64;
+  int n = int(radial_.size());
+  // Dim backdrop disc.
+  SDL_SetRenderDrawColor(ren, 10, 8, 16, 170);
+  for (int yy = -int(R + 44); yy <= int(R + 44); yy += 2) {
+    float half = std::sqrt(std::max(0.0f, (R + 44) * (R + 44) - float(yy * yy)));
+    SDL_FRect row{radialX_ - half, radialY_ + yy, half * 2, 2};
+    SDL_RenderFillRectF(ren, &row);
+  }
+  const auto& me = sim_->player(player_);
+  for (int i = 0; i < n; ++i) {
+    float a = float(i) / n * 2 * pi - pi / 2;
+    SDL_FRect r{radialX_ + std::cos(a) * R - tile / 2, radialY_ + std::sin(a) * R - tile / 2, tile, tile};
+    well(ren, r, false, i == radialSel_);
+    const RadialItem& it = radial_[size_t(i)];
+    if (!it.type.empty()) {
+      const TypeInfo* t = gd_.registry.byName(it.type);
+      thumb(t, r);
+      if (t && t->def && it.action.rfind("drop:", 0) != 0) {
+        int cost = int(t->def->num("cost", 0));
+        std::string c = std::to_string(cost);
+        drawText(ren, r.x + (r.w - textW(c, 1.5f)) / 2, r.y + r.h - 12, 1.5f, c, me.power >= cost ? kGold : kRed);
+      }
+    } else {
+      drawText(ren, r.x + (r.w - textW(it.label.substr(0, 6), 1.5f)) / 2, r.y + r.h / 2 - 5, 1.5f, it.label.substr(0, 6),
+               kGold);
+    }
+  }
+  std::string centre = radialSel_ >= 0 ? radial_[size_t(radialSel_)].label : "AIM, RELEASE RB";
+  drawText(ren, radialX_ - textW(centre, 2) / 2, radialY_ - 7, 2, centre, radialSel_ >= 0 ? kGold : kGrey);
 }
 
 }  // namespace ns

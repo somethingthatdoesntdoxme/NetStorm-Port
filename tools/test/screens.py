@@ -18,6 +18,8 @@ shots = {
     "game_skirmish": ["--skirmish", "--ai-both", "--simulate", "300"], "game_thewarbegins": ["--campaign", "thewarbegins"],
     "game_note": ["--campaign", "thunderingpower", "--simulate", "130", "--stop-at-note"],
     "game_gift": ["--mission", "skirmish", "--test-gift"],
+    "game_priest": ["--campaign", "thewarbegins", "--select", "priest"],
+    "game_radial": ["--campaign", "thewarbegins", "--select", "priest", "--test-radial"],
     "game_air": ["--campaign", "thewarbegins", "--ai-both", "--simulate", "900", "--stop-at-air", "2"],
     "sprites": ["--sprites"],
 }

@@ -61,6 +61,7 @@ add_executable(netstorm
   src/app/Viewer.cpp
   src/app/WorldView.cpp
   src/app/Sidebar.cpp
+  src/app/Gamepad.cpp
   src/app/Frontend.cpp
   src/app/FrontendSetup.cpp
   src/app/main.cpp

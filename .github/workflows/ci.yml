@@ -114,7 +114,10 @@ jobs:
           printf '%s\n' "NetStorm Port - Linux / Steam Deck" "" \
             "Run ./netstorm.sh (on Steam Deck: add it to Steam as a non-Steam game to play in Game Mode)." \
             "If it can't find NetStorm's data it asks you to drag your NetStorm folder onto its window," \
-            "or run: ./netstorm.sh --data /path/to/Netstorm" > "$d/HOW-TO-PLAY.txt"
+            "or run: ./netstorm.sh --data /path/to/Netstorm" "" \
+            "Controller: left stick cursor, A click, B back, X rotate bridge, Y home, LB next golem," \
+            "hold RB for the radial build menu, right stick / d-pad pan, triggers zoom, Start menu." \
+            "On Steam Deck set the controller layout to 'Gamepad' (not 'Keyboard and Mouse')." > "$d/HOW-TO-PLAY.txt"
           tar -C dist -czf NetStorm-Port-linux.tar.gz NetStorm-Port
           ls -la dist/NetStorm-Port NetStorm-Port-linux.tar.gz
 

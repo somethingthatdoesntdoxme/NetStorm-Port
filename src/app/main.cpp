@@ -17,6 +17,7 @@
 #include "app/Frontend.h"
 #include "app/Viewer.h"
 #include "app/WorldView.h"
+#include "app/Gamepad.h"
 #include "data/GameData.h"
 #include "net/Lan.h"
 #include "data/MissionInfo.h"
@@ -142,6 +143,7 @@ int main(int argc, char** argv) {
   int skSeed = 0, skSize = -1, skOpponents = 1;
   float viewHome = 0;
   std::string selectWhat;
+  bool testRadial = false;
   bool stopAtBalloon = false;
   bool validate = false, json = false, listMissions = false;
   double hashEvery = 0;
@@ -173,6 +175,7 @@ int main(int argc, char** argv) {
     else if (a == "--seed") skSeed = std::atoi(next().c_str());
     else if (a == "--view-home") viewHome = float(std::atof(next().c_str()));
     else if (a == "--select") selectWhat = next();
+    else if (a == "--test-radial") testRadial = true;
     else if (a == "--map-size") skSize = std::atoi(next().c_str());
     else if (a == "--opponents") skOpponents = std::atoi(next().c_str());
     else if (a == "--stop-at-balloon") stopAtBalloon = true;
@@ -502,6 +505,11 @@ int main(int argc, char** argv) {
   if (!shot.empty()) {
     if (viewHome > 0) world.focusHome(viewHome);
     if (!selectWhat.empty()) world.debugSelect(selectWhat);
+    if (testRadial) {  // what RB + stick up-right shows (drawn once so the sidebar's buttons exist)
+      drawFrame();
+      world.padRadial(true);
+      world.padRadialAim(0.7f, -0.7f);
+    }
     drawFrame();
     bool ok = r.screenshot(shot);
     std::printf("%s %s\n", ok ? "wrote" : "FAILED to write", shot.c_str());
@@ -520,11 +528,22 @@ int main(int argc, char** argv) {
   };
   bool running = true;
   Uint64 last = SDL_GetPerformanceCounter();
+  ns::Gamepad pad;  // controllers (Steam Deck etc.) become cursor + mouse/key events
+  pad.onCamera = [&](float dx, float dy, float dz) {
+    if (state == State::Game) world.padCamera(dx, dy, dz);
+  };
+  pad.onRadial = [&](bool open) {
+    if (state == State::Game) world.padRadial(open);
+  };
+  pad.onRadialAim = [&](float x, float y) {
+    if (state == State::Game) world.padRadialAim(x, y);
+  };
   while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+      if (pad.handle(e, r.window())) continue;
       if (e.type == SDL_QUIT) running = false;
-      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_TAB && state != State::Menu) {
+      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F2 && state != State::Menu) {
         state = state == State::Sprites ? State::Game : State::Sprites;
         continue;
       }
@@ -583,6 +602,7 @@ int main(int argc, char** argv) {
     Uint64 now = SDL_GetPerformanceCounter();
     double dt = double(now - last) / SDL_GetPerformanceFrequency();
     last = now;
+    pad.update(dt, r.window());
     lan.poll();
     if (lan.justStarted()) {  // the host pressed Start: everyone begins together
       hookLan();

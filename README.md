@@ -30,7 +30,7 @@ cmake --build build --config Release
 ## Run
 
 ```sh
-./build/netstorm --data "/path/to/Netstorm"            # world view (Tab: sprite viewer)
+./build/netstorm --data "/path/to/Netstorm"            # world view (F2: sprite viewer)
 ./build/netstorm --data "/path/to/Netstorm" --mission rainvsrain
 ./build/netstorm --data "/path/to/Netstorm" --fullscreen
 ./build/nstool "/path/to/Netstorm" info
@@ -47,7 +47,21 @@ place one, drag or WASD pan, wheel zoom, M / [ ] cycle missions, N test layout, 
 The left sidebar holds Storm Power (with income per minute), the golem button, the next bridge
 pieces (click the big one to rotate), units ready to drop, the build grid for whatever priest or
 workshop is selected, and a minimap (click or drag to move the view). Hover anything for a
-tooltip. Games open on your temple at roughly the original's scale. The sidebar art is drawn in
+tooltip. The strip beside MAP is the balance of power (hover for percentages). Keys: 1-6 pick
+a ready unit, H jump home, Tab next golem.
+
+Controllers (Steam Deck, Xbox, PlayStation) work everywhere, menus included:
+
+| Input | Action | Input | Action |
+|---|---|---|---|
+| Left stick | cursor | A | click |
+| Right stick / D-pad | pan | B | back / cancel |
+| LT / RT | zoom out / in | X | rotate bridge piece |
+| Hold RB + stick | radial menu of the selection's actions | Y | jump home |
+| LB | next golem | Start | menu |
+| Select | AI lays one bridge piece | | |
+
+On the Deck, use the "Gamepad" controller layout for the non-Steam shortcut. Games open on your temple at roughly the original's scale. The sidebar art is drawn in
 code; unit pictures come from your install.
 
 Sprite viewer controls: ←/→ change sprite set, PgUp/PgDn jump 10, mouse wheel zoom,

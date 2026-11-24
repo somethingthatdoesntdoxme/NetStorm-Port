@@ -107,7 +107,19 @@ class WorldView {
   void drawSidebar();
  public:
   void debugSelect(const std::string& what);  // tests: "priest" or "workshop"
+  // Gamepad hooks (see Gamepad.h).
+  void padCamera(float dx, float dy, float zoomDelta);
+  void padRadial(bool open);
+  void padRadialAim(float x, float y);
  private:
+  void drawRadial();
+  struct RadialItem {
+    std::string action, type, label;
+  };
+  std::vector<RadialItem> radial_;
+  bool radialShown_ = false;
+  int radialSel_ = -1;
+  float radialX_ = 0, radialY_ = 0;
   void drawMinimap(SDL_FRect area);
   void drawTooltip();
   bool minimapToCamera(int sx, int sy);  // true if (sx,sy) is on the minimap

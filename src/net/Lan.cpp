@@ -137,7 +137,7 @@ bool LanSession::joinRoom(const std::string& relayAddr, const std::string& code,
   addr_ = relayAddr;
   port_ = relayPort;
   roomCode_ = code;
-  W j(Msg(relay::RJoin));
+  W j{static_cast<Msg>(relay::RJoin)};
   j.str(code);
   server_.send(j.b);
   sendHello();  // the relay passes it on once we're in the room
@@ -401,7 +401,7 @@ void LanSession::tryReconnect() {
   std::string err;
   if (server_.connect(addr_, port_, &err)) {
     if (!roomCode_.empty()) {  // through a relay: back into the room first
-      W j(Msg(relay::RJoin));
+      W j{static_cast<Msg>(relay::RJoin)};
       j.str(roomCode_);
       server_.send(j.b);
     }

@@ -12,32 +12,59 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash   # Git Bash on Windows, so every step can use the same error reporting
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Runs a command; if it fails, its first error lines become annotations on the
+      # run page (so failures can be read without opening the full log).
+      - name: Error reporting helper
+        run: |
+          cat > "$RUNNER_TEMP/step.sh" <<'EOF'
+          #!/usr/bin/env bash
+          log="$RUNNER_TEMP/step.log"
+          "$@" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            hits=$(grep -iE "error|fatal|cannot|undefined|unresolved|failed" "$log" | grep -v "^--" | head -25)
+            [ -z "$hits" ] && hits=$(tail -25 "$log")
+            echo "$hits" | while IFS= read -r line; do
+              line=${line//'%'/'%25'}
+              echo "::error::${line:0:900}"
+            done
+            { echo "### Failed: $*"; echo '```'; echo "$hits"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+          EOF
+          chmod +x "$RUNNER_TEMP/step.sh"
 
       - name: Install SDL2 (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+        run: $RUNNER_TEMP/step.sh bash -c "sudo apt-get update && sudo apt-get install -y libsdl2-dev"
 
       - name: Install SDL2 (Windows)
         if: runner.os == 'Windows'
-        run: vcpkg install sdl2:x64-windows
+        run: $RUNNER_TEMP/step.sh "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install sdl2:x64-windows
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: $RUNNER_TEMP/step.sh cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+        run: |
+          root=$(cygpath -m "$VCPKG_INSTALLATION_ROOT")
+          $RUNNER_TEMP/step.sh cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$root/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: $RUNNER_TEMP/step.sh cmake --build build --config Release --parallel
 
       # Game data can't be shipped, so CI runs the data-free tests; the
       # data-driven suites (tools/test/run_all.sh) run on a machine with an install.
       - name: Unit tests
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: $RUNNER_TEMP/step.sh ctest --test-dir build -C Release --output-on-failure
 
       - name: Missing-data smoke test (must fail cleanly, not crash)
         if: runner.os == 'Linux'
@@ -47,3 +74,10 @@ jobs:
           code=$?
           echo "exit code $code"
           test $code -eq 1
+
+      - name: Relay server starts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./build/netstorm-relay --port 27999 > relay.log 2>&1 &
+          sleep 1
+          grep -q "listening" relay.log && kill %1

@@ -684,6 +684,39 @@ void WorldView::drawBridges(const Island& isl, int cx0, int cy0, int cx1, int cy
       blit(cache_.get(bridgeType_->set, bridgeType_->frame(line)), ox + (x + 1) * kCellW - 1,
            oy + (y + 1) * kCellH - 1);
     }
+  // Landings: where a bridge meets land, run a straight plank half a cell onto
+  // the ground, over the rim, so the bridge visibly lands instead of stopping
+  // at the cliff edge.
+  SDL_Renderer* ren = r_.sdl();
+  SDL_Rect oldClip;
+  bool hadClip = SDL_RenderIsClipEnabled(ren);
+  SDL_RenderGetClipRect(ren, &oldClip);
+  static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+  for (int y = cy0; y <= cy1; ++y)
+    for (int x = cx0; x <= cx1; ++x) {
+      if (!isl.bridgeAt(x, y)) continue;
+      for (int d = 0; d < 4; ++d) {
+        int lx = x + dx[d], ly = y + dy[d];
+        if (!isl.filled(lx, ly)) continue;
+        int line = bridgeType_->findLine(dy[d] == 0 ? "K" : "J", 1);
+        if (line < 0) continue;
+        // Half of the land cell nearest the bridge (generous across the
+        // other axis: plank sprites hang below their cell).
+        float cx0w = ox + lx * kCellW, cy0w = oy + ly * kCellH;
+        float hx0 = cx0w, hx1 = cx0w + kCellW, hy0 = cy0w - kCellH, hy1 = cy0w + 2 * kCellH;
+        if (dx[d] == 1) hx1 = cx0w + kCellW / 2.0f;        // land to the east: its west half
+        if (dx[d] == -1) hx0 = cx0w + kCellW / 2.0f;       // land to the west: its east half
+        if (dy[d] == 1) hy0 = cy0w, hy1 = cy0w + kCellH / 2.0f;
+        if (dy[d] == -1) hy0 = cy0w + kCellH / 2.0f, hy1 = cy0w + kCellH * 1.6f;
+        SDL_FRect c = cam_.toScreen(hx0, hy0, hx1 - hx0, hy1 - hy0);
+        SDL_Rect clip{int(std::floor(c.x)), int(std::floor(c.y)), int(std::ceil(c.w)) + 1, int(std::ceil(c.h)) + 1};
+        if (hadClip) SDL_IntersectRect(&clip, &oldClip, &clip);
+        SDL_RenderSetClipRect(ren, &clip);
+        blit(cache_.get(bridgeType_->set, bridgeType_->frame(line)), ox + (lx + 1) * kCellW - 1,
+             oy + (ly + 1) * kCellH - 1);
+      }
+    }
+  SDL_RenderSetClipRect(ren, hadClip ? &oldClip : nullptr);
 }
 
 void WorldView::drawBuildUi() {
@@ -1627,6 +1660,17 @@ void WorldView::drawChat() {
 void WorldView::debugSelect(const std::string& what) {
   if (!sim_) return;
   if (what == "findpriest") return jumpToPriest();  // what Space / Y does
+  if (what == "bridgejoin" && !islands_.empty()) {   // centre on a bridge landing (screenshots)
+    const Island& isl = islands_[0];
+    for (int y = 1; y + 1 < isl.height(); ++y)
+      for (int x = 1; x + 1 < isl.width(); ++x)
+        if (isl.bridgeAt(x, y) && isl.ownerAt(x - 1, y) == player_ && isl.filled(x - 1, y)) {
+          cam_.x = isl.worldX + x * kCellW - kSidebarW * 0.5f / cam_.zoom;
+          cam_.y = isl.worldY + y * kCellH;
+          return;
+        }
+    return;
+  }
   for (auto& e : sim_->entities()) {
     if (!e.alive || e.owner != player_) continue;
     if (what == "priest" && e.role == Role::Priest) selected_ = e.id, selectedWorkshop_ = -1;

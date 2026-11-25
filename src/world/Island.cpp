@@ -19,8 +19,14 @@ int elemIndex(Element e) { return std::max(0, int(e) - 1); }  // sun 0, thunder 
 TileChoice Island::tileFor(int x, int y, uint32_t seed) const {
   Element e = at(x, y);
   int ei = elemIndex(e);
-  bool n = filled(x, y - 1), s = filled(x, y + 1), w = filled(x - 1, y), east = filled(x + 1, y);
-  bool nw = filled(x - 1, y - 1), ne = filled(x + 1, y - 1), sw = filled(x - 1, y + 1), se = filled(x + 1, y + 1);
+  // Where a bridge lands, the landing cell counts its bridge neighbour (and
+  // the diagonals beside it) as land, so it becomes plain ground with no rim
+  // or cliff and the land runs right up to the first plank.
+  auto side = [&](int cx, int cy) { return filled(cx, cy) || bridgeAt(cx, cy) != 0; };
+  bool n = side(x, y - 1), s = side(x, y + 1), w = side(x - 1, y), east = side(x + 1, y);
+  bool landing = bridgeAt(x, y - 1) || bridgeAt(x, y + 1) || bridgeAt(x - 1, y) || bridgeAt(x + 1, y);
+  auto diag = [&](int cx, int cy) { return landing || filled(cx, cy); };
+  bool nw = diag(x - 1, y - 1), ne = diag(x + 1, y - 1), sw = diag(x - 1, y + 1), se = diag(x + 1, y + 1);
   uint32_t r = hash(uint32_t(x) * 73856093u ^ uint32_t(y) * 19349663u ^ seed);
   int rimVar = 2 * ei + 1 + int(r & 1);
 

@@ -90,7 +90,7 @@ bool Gamepad::handle(const SDL_Event& e, SDL_Window* win) {
               }
               break;
             case SDL_CONTROLLER_BUTTON_X: key(SDLK_r); break;
-            case SDL_CONTROLLER_BUTTON_Y: key(SDLK_h); break;
+            case SDL_CONTROLLER_BUTTON_Y: key(SDLK_SPACE); break;  // find your priest
             case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: key(SDLK_TAB); break;
             case SDL_CONTROLLER_BUTTON_START: key(SDLK_ESCAPE); break;
             case SDL_CONTROLLER_BUTTON_BACK: key(SDLK_b); break;

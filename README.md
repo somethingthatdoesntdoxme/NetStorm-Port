@@ -48,7 +48,9 @@ The left sidebar holds Storm Power (with income per minute), the golem button, t
 pieces (click the big one to rotate), units ready to drop, the build grid for whatever priest or
 workshop is selected, and a minimap (click or drag to move the view). Hover anything for a
 tooltip. The strip beside MAP is the balance of power (hover for percentages). Keys: 1-6 pick
-a ready unit, H jump home, Tab next golem.
+a ready unit, Space find your priest, H jump home, Tab next golem. Your priest always has a
+gold marker over him, a card in the sidebar (click it to jump to him), a ring on the minimap,
+and an arrow at the screen edge when he's out of view.
 
 Controllers (Steam Deck, Xbox, PlayStation) work everywhere, menus included:
 
@@ -57,7 +59,7 @@ Controllers (Steam Deck, Xbox, PlayStation) work everywhere, menus included:
 | Left stick | cursor | A | click |
 | Right stick / D-pad | pan | B | back / cancel |
 | LT / RT | zoom out / in | X | rotate bridge piece |
-| Hold RB + stick | radial menu of the selection's actions | Y | jump home |
+| Hold RB + stick | radial menu of the selection's actions | Y | find your priest |
 | LB | next golem | Start | menu |
 | Select | AI lays one bridge piece | | |
 

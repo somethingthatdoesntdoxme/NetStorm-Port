@@ -20,6 +20,7 @@ shots = {
     "game_gift": ["--mission", "skirmish", "--test-gift"],
     "game_priest": ["--campaign", "thewarbegins", "--select", "priest"],
     "game_radial": ["--campaign", "thewarbegins", "--select", "priest", "--test-radial"],
+    "game_findpriest": ["--campaign", "thewarbegins", "--ai-both", "--simulate", "240", "--select", "findpriest"],
     "game_air": ["--campaign", "thewarbegins", "--ai-both", "--simulate", "900", "--stop-at-air", "2"],
     "sprites": ["--sprites"],
 }

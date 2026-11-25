@@ -180,6 +180,25 @@ void WorldView::drawSidebar() {
     y += 36;
   }
 
+  // --- Your priest: always here, click to find him ---
+  if (const Entity* pr = myPriest()) {
+    SDL_FRect b{pad, y, iw, 40};
+    well(ren, b, hot(b), pr->id == selected_);
+    thumb(pr->type, {b.x, b.y, 40, 40});
+    bool carried = pr->carriedBy >= 0;
+    std::string st = carried ? "CAPTURED!" : pr->immobile ? "KNOCKED OUT" : "PRIEST";
+    drawText(ren, b.x + 44, b.y + 5, 2, st, carried || pr->immobile ? kRed : kGold);
+    SDL_FRect hp{b.x + 44, b.y + 25, b.w - 52, 6};
+    well(ren, hp);
+    float f = std::clamp(float(pr->hp) / float(std::max(1, pr->maxHp)), 0.f, 1.f);
+    SDL_FRect fill{hp.x + 1, hp.y + 1, (hp.w - 2) * f, hp.h - 2};
+    SDL_SetRenderDrawColor(ren, f > 0.5f ? 120 : 255, f > 0.5f ? 220 : 110, 90, 255);
+    SDL_RenderFillRectF(ren, &fill);
+    drawText(ren, b.x + b.w - 8 - textW("SPC", 1.5f), b.y + 6, 1.5f, "SPC", kGrey);
+    buttons_.push_back({b, "priest", "YOUR HIGH PRIEST. CLICK (OR SPACE / Y ON A PAD) TO SELECT HIM AND JUMP TO HIM."});
+    y += 48;
+  }
+
   // --- Bridge pieces: current big, next two small ---
   heading(ren, pad, y, iw, "BRIDGE");
   y += 18;
@@ -444,6 +463,16 @@ void WorldView::drawMinimap(SDL_FRect area) {
     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
     SDL_RenderFillRectF(ren, &d);
   }
+  // A pulsing ring round your priest.
+  if (const Entity* pr = myPriest()) {
+    float ex = (pr->x - minimapX0_) * sx + in.x, ey = (pr->y - minimapY0_) * sy + in.y;
+    float rad = 5 + 3 * (0.5f + 0.5f * float(std::sin(time_ * 5)));
+    SDL_SetRenderDrawColor(ren, 255, 220, 90, 255);
+    for (int k = 0; k < 24; ++k) {
+      float a0 = k / 24.f * 6.2832f, a1 = (k + 1) / 24.f * 6.2832f;
+      SDL_RenderDrawLineF(ren, ex + std::cos(a0) * rad, ey + std::sin(a0) * rad, ex + std::cos(a1) * rad, ey + std::sin(a1) * rad);
+    }
+  }
   // The camera's view.
   float wx0, wy0, wx1, wy1;
   cam_.screenToWorld(int(kSidebarW), 0, wx0, wy0);
@@ -496,6 +525,57 @@ void WorldView::drawTooltip() {
 }  // namespace ns
 
 namespace ns {
+
+// ---- Finding your priest ----
+
+const Entity* WorldView::myPriest() const {
+  if (!sim_) return nullptr;
+  for (auto& e : sim_->entities())
+    if (e.alive && e.owner == player_ && e.role == Role::Priest) return &e;
+  return nullptr;
+}
+
+void WorldView::jumpToPriest() {
+  const Entity* pr = myPriest();
+  if (!pr || islands_.empty()) return;
+  selected_ = pr->id;
+  selectedWorkshop_ = dropIndex_ = -1;
+  constructType_.clear();
+  cam_.x = islands_[0].worldX + pr->x * kCellW - kSidebarW * 0.5f / cam_.zoom;
+  cam_.y = islands_[0].worldY + pr->y * kCellH;
+}
+
+void WorldView::drawPriestFinder() {
+  const Entity* pr = myPriest();
+  if (!pr || islands_.empty()) return;
+  float px, py;
+  {
+    SDL_FRect p = cam_.toScreen(islands_[0].worldX + pr->x * kCellW, islands_[0].worldY + pr->y * kCellH, 0, 0);
+    px = p.x, py = p.y;
+  }
+  const float x0 = kSidebarW + 60, y0 = 60, x1 = float(cam_.screenW) - 60, y1 = float(cam_.screenH) - 60;  // room for the arrow tip
+  if (px >= x0 && px <= x1 && py >= y0 && py <= y1) return;  // on screen: the gold marker does the job
+  // Clamp the direction from the view centre to the screen edge.
+  float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, dx = px - cx, dy = py - cy;
+  float t = std::min(std::fabs(dx) > 0 ? ((dx > 0 ? x1 : x0) - cx) / dx : 1e9f,
+                     std::fabs(dy) > 0 ? ((dy > 0 ? y1 : y0) - cy) / dy : 1e9f);
+  float ax = cx + dx * t, ay = cy + dy * t, len = std::sqrt(dx * dx + dy * dy);
+  float ux = dx / len, uy = dy / len;
+  SDL_Renderer* ren = r_.sdl();
+  float pulse = 0.5f + 0.5f * float(std::sin(time_ * 5));
+  SDL_Color c{255, Uint8(200 + 40 * pulse), 80, 255};
+  if (pr->immobile || pr->carriedBy >= 0) c = {255, 90, 70, 255};
+  // Arrowhead pointing at the priest, with a disc behind it.
+  SDL_FRect disc{ax - 22, ay - 22, 44, 44};
+  well(ren, disc, false, true);
+  thumb(pr->type, {disc.x + 4, disc.y + 4, 36, 36});
+  float tx = ax + ux * 34, ty = ay + uy * 34;  // tip
+  SDL_Vertex v[3] = {{{tx, ty}, c, {0, 0}},
+                     {{ax + ux * 22 - uy * 10, ay + uy * 22 + ux * 10}, c, {0, 0}},
+                     {{ax + ux * 22 + uy * 10, ay + uy * 22 - ux * 10}, c, {0, 0}}};
+  SDL_RenderGeometry(ren, nullptr, v, 3, nullptr, 0);
+  buttons_.push_back({disc, "priest", "YOUR PRIEST IS OVER THERE. CLICK TO JUMP TO HIM (SPACE / Y)."});
+}
 
 // ---- Gamepad: camera and radial menu ----
 

@@ -7,7 +7,7 @@
 //   Left stick   cursor            A      click          Start   menu (Esc)
 //   Right stick  pan               B      back (Esc)     Select  AI lays a bridge piece (B)
 //   D-pad        pan               X      rotate (R)     LB      next golem (Tab)
-//   LT / RT      zoom out / in     Y      home (H)       RB hold radial menu
+//   LT / RT      zoom out / in     Y      priest (Space)       RB hold radial menu
 #pragma once
 #include <SDL.h>
 

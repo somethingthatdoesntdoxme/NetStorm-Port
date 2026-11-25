@@ -228,6 +228,7 @@ void WorldView::handle(const SDL_Event& e) {
           }
           break;
         case SDLK_h: focusHome(cam_.zoom); break;
+        case SDLK_SPACE: jumpToPriest(); break;
         case SDLK_TAB:
           if (sim_) {  // cycle through your golems
             const Entity* first = nullptr;
@@ -740,6 +741,8 @@ bool WorldView::handleUiClick(int sx, int sy) {
         message_ = why;
         messageTime_ = time_;
       }
+    } else if (b.action == "priest") {
+      jumpToPriest();
     } else if (b.action == "golem" && sim_) {
       std::string why;
       if (!issue({Command::Golem}, &why)) {
@@ -864,6 +867,7 @@ void WorldView::drawHud() {
     panel({cx - w / 2, float(cam_.screenH) - 50, w, 30});
     drawText(ren, cx - w / 2 + 10, float(cam_.screenH) - 42, 2, message_, red);
   }
+  drawPriestFinder();
   if (radialShown_) drawRadial();
   else drawTooltip();
 }
@@ -1004,6 +1008,15 @@ void WorldView::drawObjects() {
       SDL_FRect d = cam_.toScreen(wx - 9, wy - 26, 18, 28);
       SDL_SetRenderDrawColor(rr, 255, 230, 120, 255);
       SDL_RenderDrawRectF(rr, &d);
+    }
+    if (o.role == Role::Priest && o.owner == player_) {  // "that's you": bobbing gold marker
+      float bob = float(std::sin(time_ * 4)) * 2;
+      SDL_FRect m = cam_.toScreen(wx - 4, wy - 40 + bob, 8, 6);
+      float cx = m.x + m.w / 2;
+      SDL_Vertex v[3] = {{{m.x - 3, m.y}, {255, 220, 90, 255}, {0, 0}},
+                         {{m.x + m.w + 3, m.y}, {255, 220, 90, 255}, {0, 0}},
+                         {{cx, m.y + std::max(m.h, 8.0f)}, {255, 170, 40, 255}, {0, 0}}};
+      SDL_RenderGeometry(rr, nullptr, v, 3, nullptr, 0);
     }
     if (o.role == Role::Priest && o.immobile) {  // force field
       float pulse = 0.5f + 0.5f * float(std::sin(time_ * 6));
@@ -1613,6 +1626,7 @@ void WorldView::drawChat() {
 
 void WorldView::debugSelect(const std::string& what) {
   if (!sim_) return;
+  if (what == "findpriest") return jumpToPriest();  // what Space / Y does
   for (auto& e : sim_->entities()) {
     if (!e.alive || e.owner != player_) continue;
     if (what == "priest" && e.role == Role::Priest) selected_ = e.id, selectedWorkshop_ = -1;

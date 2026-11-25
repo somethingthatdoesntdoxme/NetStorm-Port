@@ -113,6 +113,9 @@ class WorldView {
   void padRadialAim(float x, float y);
  private:
   void drawRadial();
+  const Entity* myPriest() const;
+  void jumpToPriest();      // select your priest and centre the view on it
+  void drawPriestFinder();  // edge-of-screen arrow when the priest is off-screen
   struct RadialItem {
     std::string action, type, label;
   };

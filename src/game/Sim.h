@@ -38,7 +38,7 @@ struct Entity {
   bool alive = true;
 
   // Geyser
-  int crystals = 0;  // Storm Power left in it
+  int crystals = 0;  // geysers: > 0 means minable (they never run dry)
   // Golem
   enum class Job : uint8_t { Idle, ToGeyser, Mining, ToTemple, ToCapture, ToAltar, Moving, ToBuild, Building } job = Job::Idle;
   int target = -1;    // geyser id

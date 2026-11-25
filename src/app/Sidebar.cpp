@@ -166,6 +166,32 @@ void WorldView::drawSidebar() {
   }
   y += 16;
 
+  // Say why golems are standing about, rather than leaving it a mystery.
+  {
+    int golems = 0, idle = 0, mine = 0;
+    bool temple = false;
+    for (auto& e : sim_->entities()) {
+      if (!e.alive || e.owner != player_) continue;
+      temple |= e.role == Role::Temple;
+      if (e.role == Role::Golem && !e.air) golems++, idle += e.job == Entity::Job::Idle && !e.carrying;
+    }
+    if (!islands_.empty())
+      for (auto& e : sim_->entities())
+        if (e.alive && e.role == Role::Geyser && islands_[0].ownerAt(int(e.x), int(e.y)) == player_) mine++;
+    std::string why;
+    if (golems > 0 && !temple) why = "NO TEMPLE - GOLEMS CAN'T DELIVER";
+    else if (golems > 0 && mine == 0) why = "NO GEYSER ON YOUR LAND";
+    else if (idle > 0 && idle == golems) why = "GOLEMS IDLE - CAN'T REACH A GEYSER";
+    if (!why.empty()) {
+      float hgt = drawWrapped(ren, pad, y, iw, 1.5f, why, kRed, y + 40, true);
+      drawWrapped(ren, pad, y, iw, 1.5f, why, kRed, y + 40);
+      buttons_.push_back({{pad, y, iw, hgt}, "",
+                          "GOLEMS MINE GEYSERS ON LAND YOU OWN AND CARRY THE POWER TO YOUR TEMPLE. BRIDGE TO A "
+                          "GEYSER ISLAND AND CLAIM IT, OR CLEAR WHAT'S IN THE WAY."});
+      y += hgt + 6;
+    }
+  }
+
   // Golem button.
   bool temple = false;
   for (auto& e : sim_->entities()) temple |= e.alive && e.owner == player_ && e.role == Role::Temple;

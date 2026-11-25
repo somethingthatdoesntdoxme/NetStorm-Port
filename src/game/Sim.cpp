@@ -537,7 +537,8 @@ void Sim::stepGolem(Entity& g) {
         g.job = Entity::Job::Idle;
         return;
       }
-      gy->crystals -= kCrystal;
+      // Geysers never run dry (they did here once: 2000 = ten trips, then
+      // golems stood idle for the rest of the game).
       g.carrying = true;
       if (planTo(*home)) g.job = Entity::Job::ToTemple;
       else g.job = Entity::Job::Idle;
@@ -1080,7 +1081,10 @@ void Sim::stepFlyer(Entity& f) {
   if (t && dist < 4.0f) {
     damage(*t, float(d.num("hpPerSec", 15)) * kDt);
     // Man o' Wars are rewarded for kills with another lifetime.
-    if (!t->alive && f.type->name == "rainFlyer") f.life += float(d.num("lifeSpan", 60));
+    if (!t->alive && f.type->name == "rainFlyer") {  // Man o' War: each kill buys more time, up to 10x
+      float base = float(d.num("lifeSpan", 60));
+      f.life = std::min(f.life + base, base * 10);
+    }
     t->flash = 0.1f;
   }
 }
@@ -1230,7 +1234,8 @@ std::vector<std::string> Sim::validate() const {
         if (o.id == e.captive && o.alive && o.chainedAt == e.id) ok = true;
       if (!ok) say(e, "altar captive isn't chained to it");
     }
-    if (e.role == Role::Flyer && e.life > 1000) say(e, "flyer with runaway lifetime");
+    if (e.role == Role::Flyer && e.type->def && e.life > float(e.type->def->num("lifeSpan", 60)) * 10 + 1)
+      say(e, "flyer with runaway lifetime");
     if (e.role == Role::Workshop && int(e.slots.size()) > 1 + e.workshopLevel) say(e, "more slots than capacity");
   }
   for (int p = 0; p <= 8; ++p) {

@@ -424,6 +424,10 @@ int main(int argc, char** argv) {
           for (auto& e : world.sim()->entities())
             if (e.alive && e.owner == p) sh += e.role == ns::Role::Shooter, gol += e.role == ns::Role::Golem;
           auto& ps = world.sim()->player(p);
+          for (auto& e : world.sim()->entities())
+            if (e.alive && e.owner == p && e.role == ns::Role::Golem)
+              std::printf("  golem %d at %.1f,%.1f job=%d target=%d carrying=%d path=%zu home=%d\n", e.id, e.x, e.y,
+                          int(e.job), e.target, int(e.carrying), e.path.size(), e.home);
           std::printf("ECON t=%4.0f P%d power=%5.0f delivered=%3d shooters=%2d golems=%d ready=%zu\n",
                       world.sim()->time(), p, ps.power, ps.delivered, sh, gol, ps.ready.size());
         }
